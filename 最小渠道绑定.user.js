@@ -22,13 +22,15 @@
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
   let meCache = null;
   let keysCache = [];
-  let panelReady = false;
+  let mountTimer = 0;
 
-  const CREATE_KEY = "mutation CreateAPIKey($input: CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}";
-  const GET_KEYS = "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id key name type status}}pageInfo{hasNextPage endCursor}}}";
-  const GET_KEY = "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}";
-  const UPDATE_PROFILES = "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}";
-  const ME = `query Me { me { id projects { projectID } } }`;
+  const queries = {
+    createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
+    getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id key name type status}}pageInfo{hasNextPage endCursor}}}",
+    getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
+    updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
+    me: "query Me{me{id projects{projectID}}}",
+  };
 
   window.fetch = async function patchedFetch(input, init) {
     const response = await nativeFetch(input, init);
@@ -53,36 +55,34 @@
 
   function rememberGraphqlHeaders(input, init) {
     const headers = new Headers(init?.headers || input?.headers || {});
-    const authorization = headers.get("authorization");
+    const auth = headers.get("authorization");
     const projectID = headers.get("x-project-id");
-    if (authorization) graphqlHeaders.authorization = authorization;
+    if (auth) graphqlHeaders.authorization = auth;
     if (projectID) graphqlHeaders.projectID = projectID;
   }
 
   function readBody(body) {
     if (!body) return null;
     if (typeof body !== "string") return body && typeof body === "object" ? body : null;
-    try {
-      return JSON.parse(body);
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(body); } catch { return null; }
   }
 
   function rememberChannel(channel) {
-    if (!channel?.id) return;
-    CHANNELS.set(String(channel.id), { id: channel.id, name: channel.name || `Channel ${channel.id}` });
+    if (channel?.id) CHANNELS.set(String(channel.id), { id: channel.id, name: channel.name || `Channel ${channel.id}` });
   }
 
   function schedulePanel() {
-    if (panelReady) return;
     if (!location.pathname.startsWith("/marketplace") && !location.pathname.startsWith("/project/api-keys")) return;
-    requestAnimationFrame(ensurePanel);
+    if (mountTimer) return;
+    mountTimer = window.setTimeout(() => {
+      mountTimer = 0;
+      ensurePanel();
+    }, 80);
   }
 
   function ensurePanel() {
-    if (document.getElementById(PANEL_ID)) return void (panelReady = true);
-    const root = document.querySelector("main") || document.body;
+    if (document.getElementById(PANEL_ID)) return;
+    const root = findPanelRoot();
     if (!root) return;
     injectStyle();
     const panel = document.createElement("section");
@@ -111,15 +111,19 @@
     if (anchor) root.insertBefore(panel, anchor.nextSibling);
     else root.prepend(panel);
     panel.addEventListener("click", handlePanelClick);
-    panelReady = true;
     renderChannelOptions();
     loadKeys().catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
   }
 
+  function findPanelRoot() {
+    const headings = Array.from(document.querySelectorAll("main h1, main h2"));
+    const marketplaceTitle = headings.find((node) => /广场|Marketplace/i.test(node.textContent || ""));
+    return marketplaceTitle?.parentElement?.parentElement || document.querySelector("main") || document.body;
+  }
+
   function injectStyle() {
     if (document.getElementById(`${PANEL_ID}-style`)) return;
-    const style = document.createElement("style");
-    style.id = `${PANEL_ID}-style`;
+    const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `
       #${PANEL_ID}{margin:0 0 16px;color:hsl(var(--foreground,222.2 84% 4.9%))}
       #${PANEL_ID} .hkb-card{border:1px solid hsl(var(--border,214.3 31.8% 91.4%));background:hsl(var(--card,0 0% 100%));border-radius:8px;padding:16px}
@@ -142,12 +146,10 @@
   async function handlePanelClick(event) {
     const action = event.target?.dataset?.action;
     if (!action) return;
-
     try {
       setBusy(true);
-      if (action === "reload-keys") {
-        await loadKeys(true);
-      } else if (action === "bind-existing") {
+      if (action === "reload-keys") await loadKeys(true);
+      else if (action === "bind-existing") {
         await bindChannelToKey(getValue("key"), selectedChannelID());
         setStatus("已更新选中 Key 的渠道绑定");
       } else if (action === "create-bind") {
@@ -158,11 +160,7 @@
         await loadKeys(true);
         setStatus(`已新建并绑定：${key.name || name}`);
       }
-    } catch (error) {
-      setStatus(error?.message || "操作失败");
-    } finally {
-      setBusy(false);
-    }
+    } catch (error) { setStatus(error?.message || "操作失败"); } finally { setBusy(false); }
   }
 
   async function graphql(query, variables = {}, operationName = undefined) {
@@ -175,15 +173,13 @@
       body: JSON.stringify({ query, variables, operationName }),
     });
     const payload = await response.json();
-    if (!response.ok || payload.errors?.length) {
-      throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
-    }
+    if (!response.ok || payload.errors?.length) throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
     return payload.data;
   }
 
   async function loadMe() {
     if (meCache) return meCache;
-    const data = await graphql(ME, {}, "Me");
+    const data = await graphql(queries.me, {}, "Me");
     meCache = data.me;
     return meCache;
   }
@@ -199,7 +195,7 @@
     const keys = [];
     let after = null;
     do {
-      const data = await graphql(GET_KEYS, {
+      const data = await graphql(queries.getKeys, {
         first: 100,
         after,
         where: { statusIn: ["enabled", "disabled"], userID, typeNotIn: ["noauth"] },
@@ -216,7 +212,7 @@
   }
 
   async function createKey(name) {
-    const data = await graphql(CREATE_KEY, {
+    const data = await graphql(queries.createKey, {
       input: { name, type: "user", projectID: graphqlHeaders.projectID },
     }, "CreateAPIKey");
     return data.createAPIKey;
@@ -226,12 +222,12 @@
     if (!keyID) throw new Error("请选择 API Key");
     if (!channelID) throw new Error("请选择渠道");
     setStatus("正在读取当前 Key 配置");
-    const data = await graphql(GET_KEY, { id: keyID }, "GetApiKey");
+    const data = await graphql(queries.getKey, { id: keyID }, "GetApiKey");
     const numericChannelID = Number(channelID);
     if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
     if (!Number.isFinite(numericChannelID)) throw new Error(`渠道 ID 无效：${channelID}`);
     setStatus("正在写入渠道绑定");
-    await graphql(UPDATE_PROFILES, {
+    await graphql(queries.updateProfiles, {
       id: keyID,
       input: buildProfilesInput(data.node.profiles, numericChannelID),
     }, "UpdateAPIKeyProfiles");
@@ -293,6 +289,12 @@
     })[char]);
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedulePanel, { once: true });
-  else schedulePanel();
+  function startMountWatcher() {
+    schedulePanel();
+    new MutationObserver(schedulePanel).observe(document.documentElement, { childList: true, subtree: true });
+    window.addEventListener("popstate", schedulePanel);
+    window.addEventListener("hashchange", schedulePanel);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startMountWatcher, { once: true });
+  else startMountWatcher();
 })();
