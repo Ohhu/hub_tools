@@ -1,0 +1,145 @@
+载荷：
+{,…}
+operationName
+: 
+"GetApiKeys"
+query
+: 
+"\n    query GetApiKeys($first: Int, $after: Cursor, $orderBy: APIKeyOrder, $where: APIKeyWhereInput) {\n      apiKeys(first: $first, after: $after, orderBy: $orderBy, where: $where) {\n        edges {\n          node {\n            id\n            createdAt\n            updatedAt\n          user {\n            id\n            firstName\n            lastName\n          }\n            key\n            name\n            type\n            status\n            scopes\n\n          }\n          cursor\n        }\n        pageInfo {\n          hasNextPage\n          hasPreviousPage\n          startCursor\n          endCursor\n        }\n        totalCount\n      }\n    }\n  "
+variables
+: 
+{first: 20,…}
+first
+: 
+20
+orderBy
+: 
+{field: "CREATED_AT", direction: "DESC"}
+direction
+: 
+"DESC"
+field
+: 
+"CREATED_AT"
+where
+: 
+{statusIn: ["enabled", "disabled"], userID: "gid://axonhub/User/570", typeNotIn: ["noauth"]}
+statusIn
+: 
+["enabled", "disabled"]
+0
+: 
+"enabled"
+1
+: 
+"disabled"
+typeNotIn
+: 
+["noauth"]
+0
+: 
+"noauth"
+userID
+: 
+"gid://axonhub/User/570"
+
+响应：
+{
+    "data": {
+        "apiKeys": {
+            "edges": [
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/20701",
+                        "createdAt": "2026-05-08T07:40:52.790948Z",
+                        "updatedAt": "2026-05-08T07:40:52.790948Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": ""
+                        },
+                        "key": "ah-REDACTED",
+                        "name": "测试2",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVDd"
+                },
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/20685",
+                        "createdAt": "2026-05-08T07:30:50.605979Z",
+                        "updatedAt": "2026-05-08T07:33:00.884558Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": ""
+                        },
+                        "key": "ah-REDACTED",
+                        "name": "测试",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVDN"
+                },
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/20555",
+                        "createdAt": "2026-05-08T06:14:08.265463Z",
+                        "updatedAt": "2026-05-08T06:24:16.436552Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": ""
+                        },
+                        "key": "ah-REDACTED",
+                        "name": "wong 0.05x",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVBL"
+                },
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/20486",
+                        "createdAt": "2026-05-08T05:22:53.49952Z",
+                        "updatedAt": "2026-05-08T06:00:42.411771Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": ""
+                        },
+                        "key": "ah-REDACTED",
+                        "name": "Hub",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVAG"
+                }
+            ],
+            "pageInfo": {
+                "hasNextPage": false,
+                "hasPreviousPage": false,
+                "startCursor": "gaFpzVDd",
+                "endCursor": "gaFpzVAG"
+            },
+            "totalCount": 4
+        }
+    }
+}
