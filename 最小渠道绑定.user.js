@@ -16,7 +16,7 @@
 
   const GRAPHQL_PATH = "/admin/graphql";
   const PROJECT_ID = "gid://axonhub/Project/1";
-  const PANEL_ID = "hub-key-binder-minimal", TRIGGER_ID = `${PANEL_ID}-trigger`;
+  const PANEL_ID = "hub-key-binder-minimal", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
   const DIALOG_ID = `${PANEL_ID}-dialog`, CHANNEL_CACHE = `${PANEL_ID}-channels`;
   const CHANNELS = new Map();
   const nativeFetch = window.fetch.bind(window);
@@ -74,35 +74,34 @@
   function schedulePanel() {
     if (!location.pathname.startsWith("/marketplace") && !location.pathname.startsWith("/project/api-keys")) return;
     if (mountTimer) return;
-    mountTimer = window.setTimeout(() => { mountTimer = 0; ensurePanel(); }, 80);
+    mountTimer = setTimeout(() => { mountTimer = 0; ensurePanel(); }, 80);
   }
 
   function ensurePanel() {
-    if (document.getElementById(TRIGGER_ID)) return;
-    const anchor = findNewApiButton();
-    if (!anchor) return;
     injectStyle();
-    const trigger = createTrigger(anchor);
-    anchor.insertAdjacentElement("afterend", trigger);
+    for (const anchor of findCreateApiButtons()) {
+      if (!anchor.parentElement?.querySelector(`.${TRIGGER_CLASS}`)) anchor.insertAdjacentElement("afterend", createTrigger(anchor));
+    }
   }
 
-  function findNewApiButton() {
-    return Array.from(document.querySelectorAll("main button, main a")).find((node) => /新建.*(API|密钥|Key)|Create.*(API|Key)/i.test(node.textContent || ""));
-  }
+  function findCreateApiButtons() { return Array.from(document.querySelectorAll('main [data-slot="card"] button')).filter((node) => /创建\s*API\s*密钥|Create\s*API\s*Key/i.test(node.textContent || "")); }
 
   function createTrigger(anchor) {
     const button = document.createElement("button");
-    button.id = TRIGGER_ID; button.type = "button"; button.textContent = "更新 API 密钥";
-    button.className = anchor.className || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-9 rounded-md px-4";
+    button.type = "button"; button.textContent = "更新 API 密钥";
+    button.dataset.channelName = findCardChannelName(anchor); button.className = anchor.className || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-9 rounded-md px-4";
+    button.classList.add(TRIGGER_CLASS);
     button.addEventListener("click", openDialog);
     return button;
   }
+
+  function findCardChannelName(node) { return node.closest('[data-slot="card"]')?.querySelector('[data-slot="card-title"]')?.textContent?.trim() || ""; }
 
   function injectStyle() {
     if (document.getElementById(`${PANEL_ID}-style`)) return;
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `
-      #${TRIGGER_ID}{margin-left:8px}
+      .${TRIGGER_CLASS}{margin-left:4px}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:16px;color:hsl(var(--foreground,222.2 84% 4.9%))}
       #${DIALOG_ID}[hidden]{display:none}#${DIALOG_ID} .hkb-card{width:min(560px,100%);border:1px solid hsl(var(--border,214.3 31.8% 91.4%));background:hsl(var(--card,0 0% 100%));border-radius:8px;padding:18px;box-shadow:0 20px 45px rgba(0,0,0,.2)}
       #${DIALOG_ID} .hkb-head,#${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}#${DIALOG_ID} .hkb-action-buttons{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
@@ -137,9 +136,8 @@
   }
 
   function openDialog() {
-    ensureDialog();
-    document.getElementById(DIALOG_ID).hidden = false;
-    renderChannelOptions();
+    ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
+    renderChannelOptions(); selectChannelByName(this?.dataset?.channelName);
     loadKeys().catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
   }
 
@@ -263,6 +261,12 @@
     if (selected && CHANNELS.has(selected)) select.value = selected;
   }
 
+  function selectChannelByName(name) {
+    if (!name) return;
+    const channel = Array.from(CHANNELS.values()).find((item) => item.name === name), select = document.querySelector(`#${DIALOG_ID} [data-role="channel"]`);
+    if (channel && select) select.value = String(channel.id);
+  }
+
   function renderKeyOptions() {
     const select = document.querySelector(`#${DIALOG_ID} [data-role="key"]`);
     if (!select) return;
@@ -289,11 +293,9 @@
   }
 
   function startMountWatcher() {
-    loadCachedChannels();
-    schedulePanel();
+    loadCachedChannels(); schedulePanel();
     new MutationObserver(schedulePanel).observe(document.documentElement, { childList: true, subtree: true });
-    window.addEventListener("popstate", schedulePanel);
-    window.addEventListener("hashchange", schedulePanel);
+    window.addEventListener("popstate", schedulePanel); window.addEventListener("hashchange", schedulePanel);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startMountWatcher, { once: true });
   else startMountWatcher();
