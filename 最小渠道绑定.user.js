@@ -134,6 +134,7 @@
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.45);padding:16px;color:#111827}#${DIALOG_ID}[hidden]{display:none}
       #${DIALOG_ID} .hkb-card{width:min(560px,100%);border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:18px;box-shadow:0 20px 45px rgba(0,0,0,.2)}#${DIALOG_ID} .hkb-head,#${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
       #${DIALOG_ID} .hkb-title{font-size:16px;line-height:24px;font-weight:600}#${DIALOG_ID} .hkb-subtitle,#${DIALOG_ID} .hkb-status{color:#4b5563;font-size:13px;line-height:20px}#${DIALOG_ID} .hkb-grid{display:grid;gap:12px;margin:16px 0}#${DIALOG_ID} .hkb-field{display:grid;gap:6px;font-size:13px;font-weight:500}
+      #${DIALOG_ID} .hkb-switch{display:grid;grid-template-columns:1fr 1fr;gap:4px;border:1px solid #d1d5db;border-radius:8px;background:#f3f4f6;padding:4px}#${DIALOG_ID} .hkb-mode{min-height:34px;background:transparent;color:#4b5563}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{border-color:#d1d5db;background:#fff;color:#111827;box-shadow:0 1px 2px rgba(17,24,39,.08)}
       #${DIALOG_ID} .hkb-current-channel{min-height:38px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;color:#111827;font-size:13px;line-height:20px;padding:8px 10px}#${DIALOG_ID} .hkb-section{display:grid;gap:10px;border:1px solid #e5e7eb;border-radius:8px;padding:12px}#${DIALOG_ID} .hkb-section-title{font-size:14px;font-weight:600;line-height:20px}
       #${DIALOG_ID} .hkb-row,#${DIALOG_ID} .hkb-created{display:flex;align-items:end;justify-content:flex-end;gap:8px;flex-wrap:wrap}#${DIALOG_ID} .hkb-created .hkb-field{flex:1 1 320px}#${DIALOG_ID} select,#${DIALOG_ID} input{width:100%;min-height:38px;border:1px solid #d1d5db;border-radius:6px;background:#fff;color:inherit;font:inherit;padding:0 10px;outline:none}
       #${DIALOG_ID} select:focus,#${DIALOG_ID} input:focus{border-color:#111827;box-shadow:0 0 0 2px rgba(17,24,39,.12)}#${DIALOG_ID} button{min-height:38px;border-radius:6px;border:1px solid transparent;padding:0 12px;font:inherit;font-size:14px;font-weight:500;cursor:pointer}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.6}#${DIALOG_ID} .hkb-primary{background:#111827;color:#f9fafb}#${DIALOG_ID} .hkb-secondary{border-color:#d1d5db;background:#fff;color:inherit}`;
@@ -143,6 +144,10 @@
   async function handlePanelClick(event) {
     const action = event.target?.dataset?.action;
     if (!action) return;
+    if (action === "set-key-mode") {
+      setKeyMode(event.target.dataset.mode || "update");
+      return;
+    }
     try {
       setBusy(true);
       if (action === "reload-keys") await loadKeys(true);
@@ -157,6 +162,7 @@
     const channel = { id: this?.dataset?.channelId || "", name: this?.dataset?.channelName || "" };
     setCurrentChannel(channel);
     clearCreatedKey();
+    setKeyMode("update");
     loadKeys().catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
   }
 
@@ -171,14 +177,34 @@
     dialog.innerHTML = `<div class="hkb-card" role="dialog" aria-modal="true" aria-labelledby="hkb-title">
       <div class="hkb-head"><div><div class="hkb-title" id="hkb-title">更新 API 密钥</div><div class="hkb-subtitle">把选中的渠道写入 API Key 的当前 profile</div></div><button type="button" class="hkb-secondary" data-action="close">关闭</button></div>
       <div class="hkb-grid"><div class="hkb-field"><span>当前渠道</span><div class="hkb-current-channel" data-role="channel-label"></div></div>
-        <div class="hkb-section"><div class="hkb-section-title">更新已有 Key</div><label class="hkb-field"><span>API Key</span><select data-role="key"></select></label><div class="hkb-row"><button type="button" class="hkb-secondary" data-action="reload-keys">刷新 Key</button><button type="button" class="hkb-primary" data-action="bind-existing">更新密钥</button></div></div>
-        <div class="hkb-section"><div class="hkb-section-title">新建 Key 并绑定</div><label class="hkb-field"><span>新 Key 名称</span><input data-role="new-key-name" type="text" placeholder="填写后新建并绑定"></label><div class="hkb-row"><button type="button" class="hkb-primary" data-action="create-bind">新建并绑定</button></div><div class="hkb-created" data-role="created-key-wrap" hidden><label class="hkb-field"><span>新 API Key</span><input data-role="created-key" type="text" readonly></label><button type="button" class="hkb-secondary" data-action="copy-created-key">复制</button></div></div>
+        <div class="hkb-switch" role="tablist" aria-label="密钥操作">
+          <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="update" aria-selected="true">更新已有</button>
+          <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="create" aria-selected="false">新建密钥</button>
+        </div>
+        <div class="hkb-section" data-panel="update" role="tabpanel"><div class="hkb-section-title">选择要更新的 API Key</div><label class="hkb-field"><span>API Key</span><select data-role="key"></select></label><div class="hkb-row"><button type="button" class="hkb-secondary" data-action="reload-keys">刷新 Key</button><button type="button" class="hkb-primary" data-action="bind-existing">更新密钥</button></div></div>
+        <div class="hkb-section" data-panel="create" role="tabpanel" hidden><div class="hkb-section-title">新建 Key 并绑定当前渠道</div><label class="hkb-field"><span>新 Key 名称</span><input data-role="new-key-name" type="text" placeholder="填写后新建并绑定"></label><div class="hkb-row"><button type="button" class="hkb-primary" data-action="create-bind">新建并绑定</button></div><div class="hkb-created" data-role="created-key-wrap" hidden><label class="hkb-field"><span>新 API Key</span><input data-role="created-key" type="text" readonly></label><button type="button" class="hkb-secondary" data-action="copy-created-key">复制</button></div></div>
       </div><div class="hkb-actions"><div class="hkb-status" data-role="status">等待 API Key 数据</div></div></div>`;
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog || event.target?.dataset?.action === "close") closeDialog();
       else handlePanelClick(event);
     });
     document.body.appendChild(dialog);
+  }
+
+  function setKeyMode(mode) {
+    const dialog = document.getElementById(DIALOG_ID);
+    if (!dialog) return;
+    const selectedMode = mode === "create" ? "create" : "update";
+    dialog.dataset.keyMode = selectedMode;
+    dialog.querySelectorAll("[data-action='set-key-mode']").forEach((button) => {
+      button.setAttribute("aria-selected", String(button.dataset.mode === selectedMode));
+    });
+    dialog.querySelectorAll("[data-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.panel !== selectedMode;
+    });
+    const title = dialog.querySelector("#hkb-title");
+    if (title) title.textContent = selectedMode === "create" ? "新建 API 密钥" : "更新 API 密钥";
+    setStatus(selectedMode === "create" ? "填写名称后新建并绑定当前渠道" : "请选择 API Key");
   }
 
   async function graphql(query, variables = {}, operationName = undefined) {
