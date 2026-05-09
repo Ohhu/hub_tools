@@ -20,6 +20,7 @@
   const DIALOG_ID = `${PANEL_ID}-dialog`;
   const nativeFetch = window.fetch.bind(window);
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
+  const channelCache = new Map(), channelNameCache = new Map();
   let meCache = null, keysCache = [], mountTimer = 0;
 
   const queries = {
@@ -33,6 +34,7 @@
   window.fetch = async function patchedFetch(input, init) {
     const response = await nativeFetch(input, init);
     rememberGraphqlContext(input, init);
+    rememberResponseChannels(response);
     schedulePanel();
     return response;
   };
@@ -50,6 +52,15 @@
     if (projectID) graphqlHeaders.projectID = projectID;
   }
 
+  function rememberResponseChannels(response) {
+    const type = response?.headers?.get?.("content-type") || "";
+    if (!type.includes("application/json")) return;
+    response.clone().json().then((payload) => {
+      rememberChannelsFromPayload(payload);
+      schedulePanel();
+    }).catch(() => {});
+  }
+
   function extractNumericChannelID(channelID) {
     if (typeof channelID === "number") return Number.isFinite(channelID) ? channelID : null;
     const text = String(channelID || "");
@@ -61,70 +72,169 @@
   function schedulePanel() {
     if (!location.pathname.startsWith("/marketplace") && !location.pathname.startsWith("/project/api-keys")) return;
     if (mountTimer) return;
-    mountTimer = setTimeout(() => { mountTimer = 0; ensurePanel(); }, 80);
+    mountTimer = requestAnimationFrame(() => { mountTimer = 0; ensurePanel(); });
   }
 
   function ensurePanel() {
     injectStyle();
-    for (const anchor of findCreateApiButtons()) {
-      const trigger = anchor.parentElement?.querySelector(`.${TRIGGER_CLASS}`);
-      if (trigger) updateTriggerChannel(trigger, anchor);
-      else anchor.insertAdjacentElement("afterend", createTrigger(anchor));
-    }
+    for (const anchor of findCreateApiButtons()) replaceCreateApiButton(anchor);
   }
 
-  function findCreateApiButtons() { return Array.from(document.querySelectorAll('main [data-slot="card"] button')).filter((node) => /创建\s*API\s*密钥|Create\s*API\s*Key/i.test(node.textContent || "")); }
+  function findCreateApiButtons() {
+    return Array.from(document.querySelectorAll("main button")).filter(isApiKeyActionButton);
+  }
 
-  function createTrigger(anchor) {
+  function isApiKeyActionButton(node) {
+    return !isTriggerButton(node) && isCreateApiButtonText(node.textContent || "");
+  }
+
+  function isCreateApiButtonText(text) {
+    return /创建\s*API\s*密钥|Create\s*API\s*Key/i.test(String(text || ""));
+  }
+
+  function isTriggerButton(node) {
+    return Boolean(node?.classList?.contains(TRIGGER_CLASS));
+  }
+
+  function replaceCreateApiButton(anchor) {
+    const channel = findChannelFromButton(anchor);
+    if (!channel.id) return;
+    const button = createTrigger(anchor, channel);
+    anchor.replaceWith(button);
+  }
+
+  function createTrigger(anchor, channel) {
     const button = document.createElement("button");
     button.type = "button"; button.textContent = "更新 API 密钥";
     button.className = anchor.className || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-9 rounded-md px-4";
     button.classList.add(TRIGGER_CLASS);
-    updateTriggerChannel(button, anchor);
+    updateTriggerChannel(button, channel);
     button.addEventListener("click", openDialog);
     return button;
   }
 
+  function findChannelContext(node) {
+    const fixed = node.closest('[data-slot="card"], tr, [role="row"]');
+    if (fixed) return fixed;
+    let current = node.parentElement;
+    while (current && current !== document.body) {
+      if (findChannelNameFromText(textBeforeButton(current, node))) return current;
+      current = current.parentElement;
+    }
+    return node.parentElement;
+  }
+
   function findCardChannelName(node) { return node.closest('[data-slot="card"]')?.querySelector('[data-slot="card-title"]')?.textContent?.trim() || ""; }
 
-  function findCardChannel(node) {
-    const card = node.closest('[data-slot="card"]');
-    const name = findCardChannelName(node);
-    const channel = findReactChannel(card) || {};
+  function findChannelFromButton(node) {
+    const name = findVisibleChannelName(node);
+    const channel = findCachedChannel(name) || findDirectReactChannel(node) || {};
     return {
       id: channel.id ? String(channel.id) : "",
       name: channel.name || name,
     };
   }
 
-  function updateTriggerChannel(trigger, anchor) {
-    const channel = findCardChannel(anchor);
+  function findVisibleChannelName(node) {
+    return findCardChannelName(node) || findChannelNameFromText(findContextTextBeforeButton(findChannelContext(node), node));
+  }
+
+  function findContextTextBeforeButton(context, button) {
+    if (!context) return "";
+    return textBeforeButton(context, button);
+  }
+
+  function textBeforeButton(context, button) {
+    const text = [];
+    for (const current of Array.from(context.childNodes || context.children || [])) {
+      if (current === button || containsNode(current, button)) break;
+      const value = current.textContent?.trim();
+      if (value) text.push(value);
+    }
+    return text.join("\n");
+  }
+
+  function containsNode(parent, child) {
+    if (parent?.contains) return parent.contains(child);
+    let current = child?.parentElement;
+    while (current) {
+      if (current === parent) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  function findChannelNameFromText(text) {
+    const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+      const channel = findCachedChannel(line);
+      if (channel) return channel.name;
+    }
+    return "";
+  }
+
+  function findCachedChannel(name) {
+    return channelNameCache.get(normalizeChannelName(name));
+  }
+
+  function updateTriggerChannel(trigger, channel) {
     trigger.dataset.channelName = channel.name;
     if (channel.id) trigger.dataset.channelId = channel.id;
     else delete trigger.dataset.channelId;
   }
 
-  function findReactChannel(node) {
-    for (const current of [node, ...Array.from(node?.querySelectorAll("*") || [])]) {
-      for (const key of Object.keys(current || {})) {
-        if (!key.startsWith("__reactProps$") && !key.startsWith("__reactFiber$")) continue;
-        const channel = findChannelInObject(current[key]);
-        if (channel) return channel;
-      }
+  function findDirectReactChannel(node) {
+    for (const key of Object.keys(node || {})) {
+      if (!key.startsWith("__reactProps$") && !key.startsWith("__reactFiber$")) continue;
+      const channel = findChannelInObject(node[key]);
+      if (channel) return channel;
     }
     return null;
   }
 
   function findChannelInObject(value, seen = new Set()) {
     if (!value || typeof value !== "object" || seen.has(value)) return null;
+    if (Array.isArray(value)) return null;
     seen.add(value);
-    if (value.__typename === "Channel" && value.id) return value;
-    if (value.id && value.name && extractNumericChannelID(value.id)) return value;
+    if (isChannelObject(value)) return value;
     for (const child of Object.values(value)) {
       const found = findChannelInObject(child, seen);
       if (found) return found;
     }
     return null;
+  }
+
+  function isChannelObject(value) {
+    if (!value?.id || !value?.name) return false;
+    if (value.__typename === "Channel") return true;
+    if (!extractNumericChannelID(value.id)) return false;
+    return "supportedModels" in value
+      || "channelTags" in value
+      || "pricing" in value
+      || "provider" in value
+      || "type" in value;
+  }
+
+  function rememberChannelsFromPayload(payload, seen = new Set()) {
+    if (!payload || typeof payload !== "object" || seen.has(payload)) return;
+    if (Array.isArray(payload)) {
+      for (const item of payload) rememberChannelsFromPayload(item, seen);
+      return;
+    }
+    seen.add(payload);
+    if (isChannelObject(payload)) rememberChannel(payload);
+    for (const child of Object.values(payload)) rememberChannelsFromPayload(child, seen);
+  }
+
+  function rememberChannel(channel) {
+    if (!channel?.id || !channel?.name) return;
+    const item = { id: String(channel.id), name: String(channel.name) };
+    channelCache.set(item.id, item);
+    channelNameCache.set(normalizeChannelName(item.name), item);
+  }
+
+  function normalizeChannelName(name) {
+    return String(name || "").replace(/\s+/g, " ").trim();
   }
 
   function injectStyle() {
@@ -136,14 +246,15 @@
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;border-bottom:1px solid #e5e7eb;margin-bottom:20px}
       #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:#9ca3af;font-size:15px;font-weight:500;padding:0 16px 10px;cursor:pointer;margin-bottom:-1px;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:#6b7280}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:#111827;border-bottom-color:#111827;font-weight:600}
       #${DIALOG_ID} .hkb-grid{display:grid;gap:20px}
+      #${DIALOG_ID} [data-key-panel]{min-height:70px}
       #${DIALOG_ID} .hkb-field{display:grid;gap:6px}
       #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:500;color:#374151}
       #${DIALOG_ID} .hkb-channel-tag{display:inline-flex;align-items:center;gap:6px;height:36px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;color:#111827;font-size:13px;padding:0 12px}
       #${DIALOG_ID} select,#${DIALOG_ID} input[type="text"]{width:100%;height:36px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:inherit;font:inherit;padding:0 12px;outline:none;transition:border-color .15s,box-shadow .15s}#${DIALOG_ID} select:focus,#${DIALOG_ID} input[type="text"]:focus{border-color:#6b7280;box-shadow:0 0 0 3px rgba(107,114,128,.1)}
-      #${DIALOG_ID} .hkb-readonly-wrap{position:relative;display:flex;align-items:center}#${DIALOG_ID} .hkb-readonly-wrap input{padding-right:36px;background:#f3f4f6;border-color:#e5e7eb;color:#6b7280;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:13px}#${DIALOG_ID} .hkb-inline-copy{position:absolute;right:4px;height:28px;width:28px;border:none;border-radius:6px;background:transparent;color:#9ca3af;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .15s,background .15s}#${DIALOG_ID} .hkb-inline-copy:hover{color:#374151;background:#e5e7eb}
+      #${DIALOG_ID} .hkb-copy-new{border-color:#d1d5db;background:#fff;color:#374151;white-space:nowrap}#${DIALOG_ID} .hkb-copy-new:hover{background:#f3f4f6}
       #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:6px}#${DIALOG_ID} .hkb-select-row>select{flex:1;min-width:0}#${DIALOG_ID} .hkb-icon-btn{height:36px;width:36px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#9ca3af;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,border-color .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:#374151;background:#f9fafb;border-color:#9ca3af}
       #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px;padding-top:16px;border-top:1px solid #f3f4f6}
-      #${DIALOG_ID} .hkb-status{color:#6b7280;font-size:12px;line-height:16px;flex:1}
+      #${DIALOG_ID} .hkb-status{color:#6b7280;font-size:12px;line-height:16px;flex:1;min-width:0}
       #${DIALOG_ID} button{min-height:36px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
       #${DIALOG_ID} .hkb-primary{background:#111827;color:#f9fafb}#${DIALOG_ID} .hkb-primary:hover{background:#1f2937}#${DIALOG_ID} .hkb-secondary{border-color:#d1d5db;background:#fff;color:#374151}#${DIALOG_ID} .hkb-secondary:hover{background:#f9fafb}`;
     (document.head || document.documentElement).appendChild(style);
@@ -190,21 +301,24 @@
       </div>
       <div class="hkb-grid">
         <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-channel-tag" data-role="channel-label"></div></div>
-        <div data-panel="update" role="tabpanel">
+        <div data-key-panel="update" role="tabpanel">
           <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-select-row"><select data-role="key"></select><button type="button" class="hkb-icon-btn" data-action="copy-key" title="复制密钥">⧉</button><button type="button" class="hkb-icon-btn" data-action="reload-keys" title="刷新">↻</button></div></div>
         </div>
-        <div data-panel="create" role="tabpanel" hidden>
+        <div data-key-panel="create" role="tabpanel" hidden>
           <div class="hkb-field"><span class="hkb-label">Key 名称</span><input data-role="new-key-name" type="text" placeholder="输入 Key 名称"></div>
-          <div class="hkb-created" data-role="created-key-wrap" hidden>
-            <div class="hkb-field"><span class="hkb-label">生成的密钥</span><div class="hkb-readonly-wrap"><input data-role="created-key" type="text" readonly><button type="button" class="hkb-inline-copy" data-action="copy-created-key" title="复制">⧉</button></div></div>
-          </div>
         </div>
       </div>
-      <div class="hkb-actions"><div class="hkb-status" data-role="status"></div><button type="button" class="hkb-secondary" data-action="close">关闭</button><button type="button" class="hkb-primary" data-action="bind-existing" data-panel="update">更新绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-panel="create" hidden>新建并绑定</button></div>
+      <div class="hkb-actions"><div class="hkb-status" data-role="status"></div><button type="button" class="hkb-secondary" data-action="close">关闭</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button><button type="button" class="hkb-primary" data-action="bind-existing" data-action-panel="update">更新绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button></div>
     </div>`;
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog || event.target?.dataset?.action === "close") closeDialog();
       else handlePanelClick(event);
+    });
+    dialog.addEventListener("input", (event) => {
+      if (event.target?.dataset?.role === "new-key-name") {
+        clearCreatedKey();
+        setStatus("");
+      }
     });
     document.body.appendChild(dialog);
   }
@@ -217,13 +331,10 @@
     dialog.querySelectorAll("[data-action='set-key-mode']").forEach((button) => {
       button.setAttribute("aria-selected", String(button.dataset.mode === selectedMode));
     });
-    dialog.querySelectorAll("[data-panel]").forEach((el) => {
-      el.hidden = el.dataset.panel !== selectedMode;
+    dialog.querySelectorAll("[data-key-panel]").forEach((el) => {
+      el.hidden = el.dataset.keyPanel !== selectedMode;
     });
-    const actions = dialog.querySelector(".hkb-actions");
-    if (actions) actions.querySelectorAll("[data-panel]").forEach((el) => {
-      el.hidden = el.dataset.panel !== selectedMode;
-    });
+    syncActionButtons();
     setStatus("");
   }
 
@@ -351,25 +462,39 @@
   function apiKeyValue(key) { return String(key?.key || ""); }
 
   function showCreatedKey(value) {
-    const wrap = document.querySelector(`#${DIALOG_ID} [data-role="created-key-wrap"]`);
-    const input = document.querySelector(`#${DIALOG_ID} [data-role="created-key"]`);
-    if (!wrap || !input) return;
-    input.value = value || "创建成功，但响应里没有返回 Key";
-    wrap.hidden = false;
+    const dialog = document.getElementById(DIALOG_ID);
+    if (!dialog) return;
+    dialog.dataset.createdKeyValue = value || "";
+    syncActionButtons();
   }
 
   function clearCreatedKey() {
-    const wrap = document.querySelector(`#${DIALOG_ID} [data-role="created-key-wrap"]`);
-    const input = document.querySelector(`#${DIALOG_ID} [data-role="created-key"]`);
-    if (input) input.value = "";
-    if (wrap) wrap.hidden = true;
+    const dialog = document.getElementById(DIALOG_ID);
+    if (!dialog) return;
+    dialog.dataset.createdKeyValue = "";
+    syncActionButtons();
   }
 
   async function copyCreatedKey() {
-    const value = getValue("created-key");
-    if (!value || value.startsWith("创建成功")) throw new Error("没有可复制的 API Key");
+    const value = createdKeyValue();
+    if (!value) throw new Error("没有可复制的 API Key");
     await navigator.clipboard.writeText(value);
     setStatus("已复制新 API Key");
+  }
+
+  function createdKeyValue() { return document.getElementById(DIALOG_ID)?.dataset?.createdKeyValue || ""; }
+
+  function syncActionButtons() {
+    const dialog = document.getElementById(DIALOG_ID);
+    const selectedMode = dialog?.dataset?.keyMode || "update";
+    const actions = dialog?.querySelector(".hkb-actions");
+    if (!actions) return;
+    actions.querySelectorAll("[data-action-panel]").forEach((el) => {
+      const isCopyCreated = el.dataset.role === "copy-created-key";
+      const hasCreatedKey = Boolean(createdKeyValue());
+      const isCreateBind = el.dataset.action === "create-bind";
+      el.hidden = el.dataset.actionPanel !== selectedMode || (isCopyCreated && !hasCreatedKey) || (isCreateBind && hasCreatedKey);
+    });
   }
 
   async function copySelectedKey() {
@@ -408,7 +533,10 @@
   if (window.__hubKeyBinderEnableTest) {
     window.__hubKeyBinderTest = {
       extractNumericChannelID,
-      findCardChannel,
+      findChannelFromButton,
+      isApiKeyActionButton,
+      isCreateApiButtonText,
+      rememberChannelsFromPayload,
       apiKeyValue,
     };
   }
