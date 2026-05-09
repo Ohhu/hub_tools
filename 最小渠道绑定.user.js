@@ -319,7 +319,7 @@
     ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
     const channel = { id: this?.dataset?.channelId || "", name: this?.dataset?.channelName || "" };
     setCurrentChannel(channel);
-    clearCreatedKey();
+    setCreatedKeyValue("");
     setKeyMode("update");
     loadKeys().catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
   }
@@ -357,7 +357,7 @@
     });
     dialog.addEventListener("input", (event) => {
       if (event.target?.dataset?.role === "new-key-name") {
-        clearCreatedKey();
+        setCreatedKeyValue("");
         setStatus("");
       }
     });
@@ -444,7 +444,7 @@
     const key = await createKey(name);
     await bindChannelToKey(key.id, currentChannelID());
     await loadKeys(true);
-    showCreatedKey(apiKeyValue(key));
+    setCreatedKeyValue(apiKeyValue(key));
     setStatus(`已新建并绑定：${key.name || name}`);
   }
 
@@ -506,17 +506,10 @@
 
   function apiKeyValue(key) { return String(key?.key || ""); }
 
-  function showCreatedKey(value) {
+  function setCreatedKeyValue(value) {
     const dialog = document.getElementById(DIALOG_ID);
     if (!dialog) return;
     dialog.dataset.createdKeyValue = value || "";
-    syncActionButtons();
-  }
-
-  function clearCreatedKey() {
-    const dialog = document.getElementById(DIALOG_ID);
-    if (!dialog) return;
-    dialog.dataset.createdKeyValue = "";
     syncActionButtons();
   }
 
