@@ -5,8 +5,7 @@
 // @description  在 Hub 页面用弹窗把选中的渠道绑定到 API Key。
 // @author       vsiu
 // @license      GPL-3.0-only
-// @match        https://hub.linux.do/marketplace*
-// @match        https://hub.linux.do/project/api-keys*
+// @match        https://hub.linux.do/*
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
@@ -21,11 +20,12 @@
   const nativeFetch = window.fetch.bind(window);
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
   const channelCache = new Map(), channelNameCache = new Map();
-  let meCache = null, keysCache = [], mountTimer = 0;
+  let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
+  let lastPathname = location.pathname;
 
   const queries = {
     createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
-    getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id key name type status}}pageInfo{hasNextPage endCursor}}}",
+    getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}} key name type status scopes}cursor}pageInfo{hasNextPage hasPreviousPage startCursor endCursor}totalCount}}",
     getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
     updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
     me: "query Me{me{id projects{projectID}}}",
@@ -70,9 +70,30 @@
   }
 
   function schedulePanel() {
-    if (!location.pathname.startsWith("/marketplace") && !location.pathname.startsWith("/project/api-keys")) return;
+    if (!isTargetRoute()) return;
     if (mountTimer) return;
-    mountTimer = requestAnimationFrame(() => { mountTimer = 0; ensurePanel(); });
+    mountTimer = requestFrame(() => { mountTimer = 0; ensurePanel(); });
+  }
+
+  function requestFrame(callback) {
+    return typeof requestAnimationFrame === "function" ? requestAnimationFrame(callback) : setTimeout(callback, 16);
+  }
+
+  function isTargetRoute(pathname = location.pathname) {
+    return pathname.startsWith("/marketplace") || pathname.startsWith("/project/api-keys");
+  }
+
+  function handleRouteChange() {
+    if (lastPathname === location.pathname) return;
+    lastPathname = location.pathname;
+    scheduleRouteScans();
+  }
+
+  function scheduleRouteScans() {
+    if (!isTargetRoute()) return;
+    schedulePanel();
+    setTimeout(schedulePanel, 120);
+    setTimeout(schedulePanel, 360);
   }
 
   function ensurePanel() {
@@ -241,32 +262,49 @@
     if (document.getElementById(`${PANEL_ID}-style`)) return;
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
-      #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.45);padding:16px;color:#111827;font-family:system-ui,-apple-system,sans-serif}#${DIALOG_ID}[hidden]{display:none}
-      #${DIALOG_ID} .hkb-card{width:min(440px,100%);background:#fff;border-radius:12px;padding:24px;box-shadow:0 25px 50px -12px rgba(0,0,0,.25)}
-      #${DIALOG_ID} .hkb-switch{display:flex;gap:0;border-bottom:1px solid #e5e7eb;margin-bottom:20px}
-      #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:#9ca3af;font-size:15px;font-weight:500;padding:0 16px 10px;cursor:pointer;margin-bottom:-1px;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:#6b7280}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:#111827;border-bottom-color:#111827;font-weight:600}
+      #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.48);padding:16px;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
+      #${DIALOG_ID} .hkb-card{width:min(460px,100%);background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgba(15,23,42,.55),0 10px 24px -20px rgba(15,23,42,.35)}
+      #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
+      #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:#9ca3af;font-size:15px;font-weight:650;padding:0 18px 11px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:#4b5563}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:#111827;border-bottom-color:#111827}
       #${DIALOG_ID} .hkb-grid{display:grid;gap:20px}
       #${DIALOG_ID} [data-key-panel]{min-height:70px}
       #${DIALOG_ID} .hkb-field{display:grid;gap:6px}
-      #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:500;color:#374151}
-      #${DIALOG_ID} .hkb-channel-tag{display:inline-flex;align-items:center;gap:6px;height:36px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;color:#111827;font-size:13px;padding:0 12px}
-      #${DIALOG_ID} select,#${DIALOG_ID} input[type="text"]{width:100%;height:36px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:inherit;font:inherit;padding:0 12px;outline:none;transition:border-color .15s,box-shadow .15s}#${DIALOG_ID} select:focus,#${DIALOG_ID} input[type="text"]:focus{border-color:#6b7280;box-shadow:0 0 0 3px rgba(107,114,128,.1)}
+      #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:650;color:#374151}
+      #${DIALOG_ID} .hkb-control{width:100%;min-height:40px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#111827;font:inherit;font-size:14px;line-height:20px;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
+      #${DIALOG_ID} .hkb-control:focus,#${DIALOG_ID} .hkb-control[aria-expanded="true"]{background:#fff;border-color:#9ca3af;box-shadow:0 0 0 3px rgba(17,24,39,.08)}
+      #${DIALOG_ID} .hkb-channel-tag{display:flex;align-items:center;min-height:40px}
+      #${DIALOG_ID} input[type="text"]{height:40px}
       #${DIALOG_ID} .hkb-copy-new{border-color:#d1d5db;background:#fff;color:#374151;white-space:nowrap}#${DIALOG_ID} .hkb-copy-new:hover{background:#f3f4f6}
-      #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:6px}#${DIALOG_ID} .hkb-select-row>select{flex:1;min-width:0}#${DIALOG_ID} .hkb-icon-btn{height:36px;width:36px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#9ca3af;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,border-color .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:#374151;background:#f9fafb;border-color:#9ca3af}
-      #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px;padding-top:16px;border-top:1px solid #f3f4f6}
+      #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:8px}#${DIALOG_ID} .hkb-key-picker{position:relative;flex:1;min-width:0}#${DIALOG_ID} .hkb-key-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer}#${DIALOG_ID} .hkb-key-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-trigger::after{content:"";width:8px;height:8px;border-right:1.5px solid #6b7280;border-bottom:1.5px solid #6b7280;transform:rotate(45deg) translateY(-2px);flex-shrink:0;transition:transform .15s}#${DIALOG_ID} .hkb-key-trigger[aria-expanded="true"]::after{transform:rotate(225deg) translateY(-1px)}
+      #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 18px 48px -24px rgba(15,23,42,.55),0 8px 20px -18px rgba(15,23,42,.45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
+      #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:#111827;text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:#f3f4f6}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:#111827;font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:#64748b;padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:#0f172a;background:#f1f5f9}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(15,23,42,.12)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
+      #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:10px;padding-top:16px;border-top:1px solid #f3f4f6}
       #${DIALOG_ID} .hkb-status{color:#6b7280;font-size:12px;line-height:16px;flex:1;min-width:0}
-      #${DIALOG_ID} button{min-height:36px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
+      #${DIALOG_ID} button:not(.hkb-icon-btn){min-height:36px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
       #${DIALOG_ID} .hkb-primary{background:#111827;color:#f9fafb}#${DIALOG_ID} .hkb-primary:hover{background:#1f2937}#${DIALOG_ID} .hkb-secondary{border-color:#d1d5db;background:#fff;color:#374151}#${DIALOG_ID} .hkb-secondary:hover{background:#f9fafb}`;
     (document.head || document.documentElement).appendChild(style);
   }
 
   async function handlePanelClick(event) {
-    const action = event.target?.dataset?.action;
+    const actionEl = event.target?.closest?.("[data-action]");
+    const action = actionEl?.dataset?.action;
+    if (!action && !event.target?.closest?.('[data-role="key-picker"]')) closeKeyMenu();
     if (!action) return;
     if (action === "set-key-mode") {
-      setKeyMode(event.target.dataset.mode || "update");
+      setKeyMode(actionEl.dataset.mode || "update");
       return;
     }
+    if (action === "toggle-key-menu") {
+      toggleKeyMenu();
+      return;
+    }
+    if (action === "select-key") {
+      selectKey(actionEl.dataset.keyId || "");
+      closeKeyMenu();
+      return;
+    }
+    if (!actionEl.closest?.('[data-role="key-picker"]')) closeKeyMenu();
     try {
       setBusy(true);
       if (action === "reload-keys") await loadKeys(true);
@@ -300,12 +338,12 @@
         <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="create" aria-selected="false">新建密钥</button>
       </div>
       <div class="hkb-grid">
-        <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-channel-tag" data-role="channel-label"></div></div>
+        <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="channel-label"></div></div>
         <div data-key-panel="update" role="tabpanel">
-          <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-select-row"><select data-role="key"></select><button type="button" class="hkb-icon-btn" data-action="copy-key" title="复制密钥">⧉</button><button type="button" class="hkb-icon-btn" data-action="reload-keys" title="刷新">↻</button></div></div>
+          <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-select-row"><div class="hkb-key-picker" data-role="key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="key-menu" role="listbox" hidden></ul></div><button type="button" class="hkb-icon-btn" data-action="copy-key" title="复制密钥" aria-label="复制密钥"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button><button type="button" class="hkb-icon-btn" data-action="reload-keys" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M16 8h5V3"></path></svg></button></div></div>
         </div>
         <div data-key-panel="create" role="tabpanel" hidden>
-          <div class="hkb-field"><span class="hkb-label">Key 名称</span><input data-role="new-key-name" type="text" placeholder="输入 Key 名称"></div>
+          <div class="hkb-field"><span class="hkb-label">Key 名称</span><input class="hkb-control" data-role="new-key-name" type="text" placeholder="输入 Key 名称"></div>
         </div>
       </div>
       <div class="hkb-actions"><div class="hkb-status" data-role="status"></div><button type="button" class="hkb-secondary" data-action="close">关闭</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button><button type="button" class="hkb-primary" data-action="bind-existing" data-action-panel="update">更新绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button></div>
@@ -313,6 +351,9 @@
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog || event.target?.dataset?.action === "close") closeDialog();
       else handlePanelClick(event);
+    });
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeKeyMenu();
     });
     dialog.addEventListener("input", (event) => {
       if (event.target?.dataset?.role === "new-key-name") {
@@ -334,6 +375,7 @@
     dialog.querySelectorAll("[data-key-panel]").forEach((el) => {
       el.hidden = el.dataset.keyPanel !== selectedMode;
     });
+    closeKeyMenu();
     syncActionButtons();
     setStatus("");
   }
@@ -392,7 +434,7 @@
   }
 
   async function updateExistingKeyBinding() {
-    await bindChannelToKey(getValue("key"), currentChannelID());
+    await bindChannelToKey(selectedKeyID, currentChannelID());
     setStatus("已更新选中 Key 的渠道绑定");
   }
 
@@ -436,11 +478,14 @@
   }
 
   function renderKeyOptions() {
-    const select = document.querySelector(`#${DIALOG_ID} [data-role="key"]`);
-    if (!select) return;
-    select.innerHTML = keysCache.length
-      ? keysCache.map((key) => `<option value="${escapeHtml(key.id)}">${escapeHtml(key.name || key.key || key.id)}</option>`).join("")
-      : `<option value="">暂无 API Key</option>`;
+    if (!keysCache.some((key) => key.id === selectedKeyID)) selectedKeyID = keysCache[0]?.id || "";
+    const menu = document.querySelector(`#${DIALOG_ID} [data-role="key-menu"]`);
+    if (menu) {
+      menu.innerHTML = keysCache.length
+        ? keysCache.map((key) => `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}" role="option" aria-selected="${String(key.id === selectedKeyID)}"><span>${escapeHtml(keyLabel(key))}</span></button></li>`).join("")
+        : `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="" role="option" disabled>暂无 API Key</button></li>`;
+    }
+    syncKeyPicker();
   }
 
   function setCurrentChannel(channel) {
@@ -498,7 +543,7 @@
   }
 
   async function copySelectedKey() {
-    const keyID = getValue("key");
+    const keyID = selectedKeyID;
     if (!keyID) throw new Error("请先选择 API Key");
     const key = keysCache.find((k) => k.id === keyID);
     if (!key?.key) throw new Error("该 Key 无可复制的密钥值");
@@ -506,11 +551,49 @@
     setStatus("已复制密钥");
   }
 
+  function keyLabel(key) { return String(key?.name || key?.id || "未命名 API Key"); }
+
+  function selectKey(keyID) {
+    if (!keyID || !keysCache.some((key) => key.id === keyID)) return;
+    selectedKeyID = keyID;
+    syncKeyPicker();
+  }
+
+  function syncKeyPicker() {
+    const trigger = document.querySelector(`#${DIALOG_ID} [data-role="key-trigger"]`);
+    const label = document.querySelector(`#${DIALOG_ID} [data-role="key-label"]`);
+    const current = keysCache.find((key) => key.id === selectedKeyID);
+    if (label) label.textContent = current ? keyLabel(current) : "暂无 API Key";
+    if (trigger) trigger.disabled = !keysCache.length;
+    document.querySelectorAll(`#${DIALOG_ID} [data-action="select-key"]`).forEach((option) => {
+      option.setAttribute("aria-selected", String(option.dataset.keyId === selectedKeyID));
+    });
+  }
+
+  function toggleKeyMenu() {
+    const trigger = document.querySelector(`#${DIALOG_ID} [data-role="key-trigger"]`);
+    const menu = document.querySelector(`#${DIALOG_ID} [data-role="key-menu"]`);
+    if (!trigger || !menu || !keysCache.length) return;
+    const open = menu.hidden;
+    menu.hidden = !open;
+    trigger.setAttribute("aria-expanded", String(open));
+  }
+
+  function closeKeyMenu() {
+    const trigger = document.querySelector(`#${DIALOG_ID} [data-role="key-trigger"]`);
+    const menu = document.querySelector(`#${DIALOG_ID} [data-role="key-menu"]`);
+    if (menu) menu.hidden = true;
+    if (trigger) trigger.setAttribute("aria-expanded", "false");
+  }
+
   function getValue(role) { return document.querySelector(`#${DIALOG_ID} [data-role="${role}"]`)?.value || ""; }
   function setStatus(message) {
     const status = document.querySelector(`#${DIALOG_ID} [data-role="status"]`); if (status) status.textContent = message;
   }
-  function setBusy(isBusy) { document.querySelectorAll(`#${DIALOG_ID} button`).forEach((button) => { button.disabled = isBusy; }); }
+  function setBusy(isBusy) {
+    document.querySelectorAll(`#${DIALOG_ID} button`).forEach((button) => { button.disabled = isBusy; });
+    if (!isBusy) syncKeyPicker();
+  }
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -523,9 +606,41 @@
   }
 
   function startMountWatcher() {
-    schedulePanel();
-    new MutationObserver(schedulePanel).observe(document.documentElement, { childList: true, subtree: true });
-    window.addEventListener("popstate", schedulePanel); window.addEventListener("hashchange", schedulePanel);
+    patchHistoryRouting();
+    scheduleRouteScans();
+    new MutationObserver((mutations) => {
+      if (isTargetRoute() && mutations.some(isUsefulMutation)) schedulePanel();
+    }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+    window.addEventListener("popstate", handleRouteChange);
+    window.addEventListener("hashchange", handleRouteChange);
+  }
+
+  function patchHistoryRouting() {
+    if (history.__hubKeyBinderPatched) return;
+    for (const method of ["pushState", "replaceState"]) {
+      const original = history[method];
+      history[method] = function patchedHistoryMethod(...args) {
+        const result = original.apply(this, args);
+        setTimeout(handleRouteChange, 0);
+        return result;
+      };
+    }
+    Object.defineProperty(history, "__hubKeyBinderPatched", { value: true });
+  }
+
+  function isUsefulMutation(mutation) {
+    if (mutation.target?.closest?.(`#${DIALOG_ID}`)) return false;
+    for (const node of mutation.addedNodes || []) {
+      if (isUsefulAddedNode(node)) return true;
+    }
+    return false;
+  }
+
+  function isUsefulAddedNode(node) {
+    if (node.nodeType !== 1) return false;
+    if (node.closest?.(`#${DIALOG_ID}`)) return false;
+    if (node.matches?.("main, button, [data-slot='card'], tr, [role='row']")) return true;
+    return Boolean(node.querySelector?.("main, button, [data-slot='card'], tr, [role='row']"));
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startMountWatcher, { once: true });
   else startMountWatcher();

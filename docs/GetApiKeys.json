@@ -1,11 +1,33 @@
+标头：
+fetch("https://hub.linux.do/admin/graphql", {
+  "headers": {
+    "accept": "*/*",
+    "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "authorization": "{$authorization}",
+    "content-type": "application/json",
+    "priority": "u=1, i",
+    "sec-ch-ua": "\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"macOS\"",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "sec-gpc": "1",
+    "x-project-id": "gid://axonhub/Project/1",
+    "cookie": "{$cookies}",
+    "Referer": "https://hub.linux.do/project/api-keys"
+  },
+  "body": "{\"query\":\"\\n    query GetApiKeys($first: Int, $after: Cursor, $orderBy: APIKeyOrder, $where: APIKeyWhereInput) {\\n      apiKeys(first: $first, after: $after, orderBy: $orderBy, where: $where) {\\n        edges {\\n          node {\\n            id\\n            createdAt\\n            updatedAt\\n          user {\\n            id\\n            firstName\\n            lastName\\n            email\\n            avatar\\n            linuxdoUserID\\n            linuxdoUsername\\n            linuxdoProfile {\\n              id\\n              username\\n              name\\n              avatarTemplate\\n              avatarUrl\\n              active\\n              trustLevel\\n              silenced\\n              externalIds\\n              updatedAt\\n            }\\n          }\\n            key\\n            name\\n            type\\n            status\\n            scopes\\n          }\\n          cursor\\n        }\\n        pageInfo {\\n          hasNextPage\\n          hasPreviousPage\\n          startCursor\\n          endCursor\\n        }\\n        totalCount\\n      }\\n    }\\n  \",\"variables\":{\"first\":20,\"where\":{\"statusIn\":[\"enabled\",\"disabled\"],\"userID\":\"gid://axonhub/User/570\",\"typeNotIn\":[\"noauth\"]},\"orderBy\":{\"field\":\"CREATED_AT\",\"direction\":\"DESC\"}},\"operationName\":\"GetApiKeys\"}",
+  "method": "POST"
+});
+
 载荷：
-{,…}
 operationName
 : 
 "GetApiKeys"
 query
 : 
-"\n    query GetApiKeys($first: Int, $after: Cursor, $orderBy: APIKeyOrder, $where: APIKeyWhereInput) {\n      apiKeys(first: $first, after: $after, orderBy: $orderBy, where: $where) {\n        edges {\n          node {\n            id\n            createdAt\n            updatedAt\n          user {\n            id\n            firstName\n            lastName\n          }\n            key\n            name\n            type\n            status\n            scopes\n\n          }\n          cursor\n        }\n        pageInfo {\n          hasNextPage\n          hasPreviousPage\n          startCursor\n          endCursor\n        }\n        totalCount\n      }\n    }\n  "
+"\n    query GetApiKeys($first: Int, $after: Cursor, $orderBy: APIKeyOrder, $where: APIKeyWhereInput) {\n      apiKeys(first: $first, after: $after, orderBy: $orderBy, where: $where) {\n        edges {\n          node {\n            id\n            createdAt\n            updatedAt\n          user {\n            id\n            firstName\n            lastName\n            email\n            avatar\n            linuxdoUserID\n            linuxdoUsername\n            linuxdoProfile {\n              id\n              username\n              name\n              avatarTemplate\n              avatarUrl\n              active\n              trustLevel\n              silenced\n              externalIds\n              updatedAt\n            }\n          }\n            key\n            name\n            type\n            status\n            scopes\n          }\n          cursor\n        }\n        pageInfo {\n          hasNextPage\n          hasPreviousPage\n          startCursor\n          endCursor\n        }\n        totalCount\n      }\n    }\n  "
 variables
 : 
 {first: 20,…}
@@ -50,15 +72,179 @@ userID
             "edges": [
                 {
                     "node": {
+                        "id": "gid://axonhub/APIKey/21512",
+                        "createdAt": "2026-05-09T07:28:18.575783Z",
+                        "updatedAt": "2026-05-09T08:04:04.355807Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
+                        },
+                        "key": "{$key}",
+                        "name": "测试7",
+                        "type": "user",
+                        "status": "disabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVQI"
+                },
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/21485",
+                        "createdAt": "2026-05-09T07:14:59.778661Z",
+                        "updatedAt": "2026-05-09T07:15:00.180462Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
+                        },
+                        "key": "{$key}",
+                        "name": "测试6",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVPt"
+                },
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/20899",
+                        "createdAt": "2026-05-08T15:10:44.772608Z",
+                        "updatedAt": "2026-05-09T07:14:22.868396Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
+                        },
+                        "key": "{$key}",
+                        "name": "测试5",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVGj"
+                },
+                {
+                    "node": {
+                        "id": "gid://axonhub/APIKey/20882",
+                        "createdAt": "2026-05-08T14:51:06.629897Z",
+                        "updatedAt": "2026-05-08T14:51:07.051908Z",
+                        "user": {
+                            "id": "gid://axonhub/User/570",
+                            "firstName": "Merit",
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
+                        },
+                        "key": "{$key}",
+                        "name": "测试4",
+                        "type": "user",
+                        "status": "enabled",
+                        "scopes": [
+                            "read_channels",
+                            "write_requests"
+                        ]
+                    },
+                    "cursor": "gaFpzVGS"
+                },
+                {
+                    "node": {
                         "id": "gid://axonhub/APIKey/20701",
                         "createdAt": "2026-05-08T07:40:52.790948Z",
                         "updatedAt": "2026-05-08T07:40:52.790948Z",
                         "user": {
                             "id": "gid://axonhub/User/570",
                             "firstName": "Merit",
-                            "lastName": ""
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
                         },
-                        "key": "ah-REDACTED",
+                        "key": "{$key}",
                         "name": "测试2",
                         "type": "user",
                         "status": "enabled",
@@ -77,9 +263,25 @@ userID
                         "user": {
                             "id": "gid://axonhub/User/570",
                             "firstName": "Merit",
-                            "lastName": ""
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
                         },
-                        "key": "ah-REDACTED",
+                        "key": "{$key}",
                         "name": "测试",
                         "type": "user",
                         "status": "enabled",
@@ -98,9 +300,25 @@ userID
                         "user": {
                             "id": "gid://axonhub/User/570",
                             "firstName": "Merit",
-                            "lastName": ""
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
                         },
-                        "key": "ah-REDACTED",
+                        "key": "{$key}",
                         "name": "wong 0.05x",
                         "type": "user",
                         "status": "enabled",
@@ -119,9 +337,25 @@ userID
                         "user": {
                             "id": "gid://axonhub/User/570",
                             "firstName": "Merit",
-                            "lastName": ""
+                            "lastName": "",
+                            "email": "1oap8qifegonqkgqs58jarf7083qvqeel4fkr0dub2rplh23ky@privaterelay.linux.do",
+                            "avatar": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                            "linuxdoUserID": "29811",
+                            "linuxdoUsername": "vsiu",
+                            "linuxdoProfile": {
+                                "id": "29811",
+                                "username": "vsiu",
+                                "name": "Merit",
+                                "avatarTemplate": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "avatarUrl": "https://cdn.ldstatic.com/user_avatar/linux.do/vsiu/288/538125_2.png",
+                                "active": true,
+                                "trustLevel": 3,
+                                "silenced": false,
+                                "externalIds": null,
+                                "updatedAt": "2026-05-08T14:05:56.034197404Z"
+                            }
                         },
-                        "key": "ah-REDACTED",
+                        "key": "{$key}",
                         "name": "Hub",
                         "type": "user",
                         "status": "enabled",
@@ -136,10 +370,10 @@ userID
             "pageInfo": {
                 "hasNextPage": false,
                 "hasPreviousPage": false,
-                "startCursor": "gaFpzVDd",
+                "startCursor": "gaFpzVQI",
                 "endCursor": "gaFpzVAG"
             },
-            "totalCount": 4
+            "totalCount": 8
         }
     }
 }

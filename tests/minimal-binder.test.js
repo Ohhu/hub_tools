@@ -136,6 +136,22 @@ assert.equal(source.includes('data-role="created-key"'), false);
 assert.equal(source.includes("data-panel="), false);
 assert.equal(source.includes("data-key-panel="), true);
 assert.equal(source.includes("data-action-panel="), true);
+assert.equal(source.includes("<select"), false);
+assert.equal(source.includes('data-role="key-trigger"'), true);
+assert.equal(source.includes('data-role="key-menu"'), true);
+assert.equal(source.includes('data-action="select-key"'), true);
+assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
+assert.equal(source.includes("function isTargetRoute"), true);
+assert.equal(source.includes("function patchHistoryRouting"), true);
+assert.equal(source.includes('["pushState", "replaceState"]'), true);
+assert.equal(source.includes("new MutationObserver((mutations) =>"), true);
+assert.equal(source.includes('hkb-icon-btn svg'), true);
+assert.equal(source.includes('aria-label="复制密钥"'), true);
+assert.equal(source.includes('>⧉</button>'), false);
+assert.equal(source.includes('>↻</button>'), false);
+assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), true);
+assert.equal(source.includes("node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername"), true);
+assert.equal(source.includes("async function loadSelectedKeyValue"), false);
 
 {
   const trigger = new FakeElement({ text: "更新 API 密钥" });
