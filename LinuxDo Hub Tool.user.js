@@ -1,5 +1,7 @@
 // ==UserScript==
-// @name         LinuxDo Hub 渠道 Key 绑定最小版
+// @name         LinuxDo Hub Tool
+// @name:zh-CN   LinuxDo Hub Tool
+// @name:en      LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
 // @version      0.1.0
 // @description  在 Hub 页面用弹窗把选中的渠道绑定到 API Key。
@@ -15,7 +17,7 @@
 
   const GRAPHQL_PATH = "/admin/graphql";
   const PROJECT_ID = "gid://axonhub/Project/1";
-  const PANEL_ID = "hub-key-binder-minimal", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
+  const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
   const DIALOG_ID = `${PANEL_ID}-dialog`;
   const nativeFetch = window.fetch.bind(window);
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };

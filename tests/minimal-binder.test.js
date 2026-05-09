@@ -89,7 +89,7 @@ class FakeElement {
 }
 
 function loadHelpers() {
-  const source = fs.readFileSync("最小渠道绑定.user.js", "utf8");
+  const source = fs.readFileSync("LinuxDo Hub Tool.user.js", "utf8");
   const documentElement = new FakeElement();
   const context = {
     Headers,
@@ -126,7 +126,7 @@ function loadHelpers() {
 
 const helpers = loadHelpers();
 const plain = (value) => JSON.parse(JSON.stringify(value));
-const source = fs.readFileSync("最小渠道绑定.user.js", "utf8");
+const source = fs.readFileSync("LinuxDo Hub Tool.user.js", "utf8");
 
 assert.equal(helpers.isCreateApiButtonText("创建 API 密钥"), true);
 assert.equal(helpers.isCreateApiButtonText("Create API Key"), true);
@@ -155,7 +155,7 @@ assert.equal(source.includes("async function loadSelectedKeyValue"), false);
 
 {
   const trigger = new FakeElement({ text: "更新 API 密钥" });
-  trigger.classList.add("hub-key-binder-minimal-trigger");
+  trigger.classList.add("linuxdo-hub-tool-trigger");
   assert.equal(helpers.isApiKeyActionButton(trigger), false);
 }
 
