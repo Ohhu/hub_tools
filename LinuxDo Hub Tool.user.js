@@ -1,12 +1,11 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
-// @name:zh-CN   LinuxDo Hub Tool
-// @name:en      LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.1.0
+// @version      0.1.1
 // @description  在 Hub 页面用弹窗把选中的渠道绑定到 API Key。
 // @author       vsiu
 // @license      GPL-3.0-only
+// @icon         https://hub.linux.do/favicon
 // @match        https://hub.linux.do/*
 // @run-at       document-start
 // @grant        none
