@@ -147,11 +147,54 @@ assert.equal(source.includes('["pushState", "replaceState"]'), true);
 assert.equal(source.includes("new MutationObserver((mutations) =>"), true);
 assert.equal(source.includes('hkb-icon-btn svg'), true);
 assert.equal(source.includes('aria-label="复制密钥"'), true);
+assert.equal(source.includes('aria-label="编辑绑定渠道"'), true);
+assert.equal(source.includes('data-action="append-bind"'), true);
+assert.equal(source.includes('data-action="replace-bind"'), true);
+assert.equal(source.includes(">替换绑定</button>"), true);
+assert.equal(source.includes('data-view-panel="edit"'), true);
 assert.equal(source.includes('>⧉</button>'), false);
 assert.equal(source.includes('>↻</button>'), false);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), true);
 assert.equal(source.includes("node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername"), true);
 assert.equal(source.includes("async function loadSelectedKeyValue"), false);
+
+{
+  const input = {
+    activeProfile: "default",
+    profiles: [
+      {
+        name: "default",
+        channelIDs: [5638],
+        channelTags: ["fast"],
+        modelMappings: [],
+        modelIDs: [],
+      },
+    ],
+  };
+  assert.deepEqual(plain(helpers.buildProfilesInput(input, 29812, "append")).profiles[0].channelIDs, [5638, 29812]);
+}
+
+{
+  const input = {
+    activeProfile: "default",
+    profiles: [
+      {
+        name: "default",
+        channelIDs: [5638, 29812],
+      },
+    ],
+  };
+  assert.deepEqual(plain(helpers.buildProfilesInput(input, 29812, "append")).profiles[0].channelIDs, [5638, 29812]);
+  assert.deepEqual(plain(helpers.buildProfilesInput(input, 42, "replace")).profiles[0].channelIDs, [42]);
+}
+
+{
+  const input = {
+    activeProfile: "default",
+    profiles: [{ name: "default", channelIDs: [5638, 29812] }],
+  };
+  assert.deepEqual(plain(helpers.buildProfilesInputWithChannelIDs(input, [29812])).profiles[0].channelIDs, [29812]);
+}
 
 {
   const trigger = new FakeElement({ text: "更新 API 密钥" });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.1.1
+// @version      0.2.0
 // @description  在 Hub 页面用弹窗把选中的渠道绑定到 API Key。
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -22,6 +22,7 @@
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
   const channelCache = new Map(), channelNameCache = new Map();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
+  let editChannelIDs = [];
   let lastPathname = location.pathname;
 
   const queries = {
@@ -252,6 +253,8 @@
     if (!channel?.id || !channel?.name) return;
     const item = { id: String(channel.id), name: String(channel.name) };
     channelCache.set(item.id, item);
+    const numericID = extractNumericChannelID(item.id);
+    if (numericID) channelCache.set(String(numericID), item);
     channelNameCache.set(normalizeChannelName(item.name), item);
   }
 
@@ -264,9 +267,11 @@
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.48);padding:16px;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
-      #${DIALOG_ID} .hkb-card{width:min(460px,100%);background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgba(15,23,42,.55),0 10px 24px -20px rgba(15,23,42,.35)}
+      #${DIALOG_ID} .hkb-card{width:min(460px,100%);min-height:388px;background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgba(15,23,42,.55),0 10px 24px -20px rgba(15,23,42,.35);display:flex;flex-direction:column}
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
       #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:#9ca3af;font-size:15px;font-weight:650;padding:0 18px 11px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:#4b5563}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:#111827;border-bottom-color:#111827}
+      #${DIALOG_ID} .hkb-main{flex:1;display:flex;flex-direction:column}
+      #${DIALOG_ID} [data-view-panel][hidden]{display:none}
       #${DIALOG_ID} .hkb-grid{display:grid;gap:20px}
       #${DIALOG_ID} [data-key-panel]{min-height:70px}
       #${DIALOG_ID} .hkb-field{display:grid;gap:6px}
@@ -280,10 +285,16 @@
       #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 18px 48px -24px rgba(15,23,42,.55),0 8px 20px -18px rgba(15,23,42,.45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
       #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:#111827;text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:#f3f4f6}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:#111827;font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:#64748b;padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:#0f172a;background:#f1f5f9}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(15,23,42,.12)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
-      #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:10px;padding-top:16px;border-top:1px solid #f3f4f6}
+      #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:8px;margin-bottom:20px;font-size:15px;font-weight:650;color:#111827}
+      #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
+      #${DIALOG_ID} .hkb-edit-list{height:112px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:#cbd5e1 transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:#cbd5e1}
+      #${DIALOG_ID} .hkb-channel-row{min-height:34px;display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;color:#111827;font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:#fff}#${DIALOG_ID} .hkb-channel-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-remove{border:none;background:transparent;color:#6b7280;padding:0 6px;min-height:26px;font-size:12px}#${DIALOG_ID} .hkb-remove:hover{background:#f3f4f6;color:#111827}
+      #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:#9ca3af;font-size:13px}
+      #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;padding-top:16px;border-top:1px solid #f3f4f6}
+      #${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{display:flex;align-items:center;gap:8px}
       #${DIALOG_ID} .hkb-status{color:#6b7280;font-size:12px;line-height:16px;flex:1;min-width:0}
       #${DIALOG_ID} button:not(.hkb-icon-btn){min-height:36px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
-      #${DIALOG_ID} .hkb-primary{background:#111827;color:#f9fafb}#${DIALOG_ID} .hkb-primary:hover{background:#1f2937}#${DIALOG_ID} .hkb-secondary{border-color:#d1d5db;background:#fff;color:#374151}#${DIALOG_ID} .hkb-secondary:hover{background:#f9fafb}`;
+      #${DIALOG_ID} .hkb-primary{background:#111827;color:#f9fafb}#${DIALOG_ID} .hkb-primary:hover{background:#1f2937}#${DIALOG_ID} .hkb-secondary{border-color:#d1d5db;background:#f3f4f6;color:#374151}#${DIALOG_ID} .hkb-secondary:hover{background:#e5e7eb}#${DIALOG_ID} .hkb-ghost{border-color:transparent;background:transparent;color:#374151}#${DIALOG_ID} .hkb-ghost:hover{background:#f9fafb}`;
     (document.head || document.documentElement).appendChild(style);
   }
 
@@ -305,11 +316,29 @@
       closeKeyMenu();
       return;
     }
+    if (action === "open-edit") {
+      openEditPanel().catch((error) => setEditStatus(error?.message || "绑定渠道加载失败"));
+      return;
+    }
+    if (action === "close-edit") {
+      showMainPanel();
+      return;
+    }
+    if (action === "edit-add-current") {
+      addCurrentChannelToEditList();
+      return;
+    }
+    if (action === "edit-remove-channel") {
+      removeEditChannel(actionEl.dataset.channelId || "");
+      return;
+    }
     if (!actionEl.closest?.('[data-role="key-picker"]')) closeKeyMenu();
     try {
       setBusy(true);
       if (action === "reload-keys") await loadKeys(true);
-      else if (action === "bind-existing") await updateExistingKeyBinding();
+      else if (action === "append-bind") await updateExistingKeyBinding("append");
+      else if (action === "replace-bind") await updateExistingKeyBinding("replace");
+      else if (action === "save-edit") await saveEditBindings();
       else if (action === "create-bind") await createKeyAndBind();
       else if (action === "copy-created-key") await copyCreatedKey();
       else if (action === "copy-key") await copySelectedKey();
@@ -322,6 +351,7 @@
     setCurrentChannel(channel);
     setCreatedKeyValue("");
     setKeyMode("update");
+    showMainPanel();
     loadKeys().catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
   }
 
@@ -334,20 +364,31 @@
     const dialog = document.createElement("div");
     dialog.id = DIALOG_ID; dialog.hidden = true;
     dialog.innerHTML = `<div class="hkb-card" role="dialog" aria-modal="true">
-      <div class="hkb-switch" role="tablist" aria-label="密钥操作">
-        <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="update" aria-selected="true">更新绑定</button>
-        <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="create" aria-selected="false">新建密钥</button>
-      </div>
-      <div class="hkb-grid">
-        <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="channel-label"></div></div>
-        <div data-key-panel="update" role="tabpanel">
-          <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-select-row"><div class="hkb-key-picker" data-role="key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="key-menu" role="listbox" hidden></ul></div><button type="button" class="hkb-icon-btn" data-action="copy-key" title="复制密钥" aria-label="复制密钥"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button><button type="button" class="hkb-icon-btn" data-action="reload-keys" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M16 8h5V3"></path></svg></button></div></div>
+      <div class="hkb-main" data-view-panel="main">
+        <div class="hkb-switch" role="tablist" aria-label="密钥操作">
+          <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="update" aria-selected="true">绑定渠道</button>
+          <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="create" aria-selected="false">新建密钥</button>
         </div>
-        <div data-key-panel="create" role="tabpanel" hidden>
-          <div class="hkb-field"><span class="hkb-label">Key 名称</span><input class="hkb-control" data-role="new-key-name" type="text" placeholder="输入 Key 名称"></div>
+        <div class="hkb-grid">
+          <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="channel-label"></div></div>
+          <div data-key-panel="update" role="tabpanel">
+            <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-select-row"><div class="hkb-key-picker" data-role="key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="key-menu" role="listbox" hidden></ul></div><button type="button" class="hkb-icon-btn" data-action="copy-key" title="复制密钥" aria-label="复制密钥"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button><button type="button" class="hkb-icon-btn" data-action="reload-keys" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M16 8h5V3"></path></svg></button><button type="button" class="hkb-icon-btn" data-action="open-edit" title="编辑绑定渠道" aria-label="编辑绑定渠道"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg></button></div></div>
+          </div>
+          <div data-key-panel="create" role="tabpanel" hidden>
+            <div class="hkb-field"><span class="hkb-label">Key 名称</span><input class="hkb-control" data-role="new-key-name" type="text" placeholder="输入 Key 名称"></div>
+          </div>
         </div>
+        <div class="hkb-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="append-bind" data-action-panel="update">追加绑定</button><button type="button" class="hkb-secondary" data-action="replace-bind" data-action-panel="update">替换绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button></div><div class="hkb-status" data-role="status"></div><div class="hkb-action-right"><button type="button" class="hkb-ghost" data-action="close">关闭</button></div></div>
       </div>
-      <div class="hkb-actions"><div class="hkb-status" data-role="status"></div><button type="button" class="hkb-secondary" data-action="close">关闭</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button><button type="button" class="hkb-primary" data-action="bind-existing" data-action-panel="update">更新绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button></div>
+      <div class="hkb-main" data-view-panel="edit" hidden>
+        <div class="hkb-edit-title"><button type="button" class="hkb-icon-btn hkb-back" data-action="close-edit" title="返回" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span>编辑绑定渠道</span></div>
+        <div class="hkb-grid">
+          <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-control hkb-channel-tag" data-role="edit-key-label"></div></div>
+          <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="edit-channel-label"></div></div>
+          <div class="hkb-field"><span class="hkb-label">已绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
+        </div>
+        <div class="hkb-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="edit-add-current">添加当前渠道</button></div><div class="hkb-status" data-role="edit-status"></div><div class="hkb-action-right"><button type="button" class="hkb-secondary" data-action="save-edit">保存修改</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
+      </div>
     </div>`;
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog || event.target?.dataset?.action === "close") closeDialog();
@@ -362,6 +403,9 @@
         setStatus("");
       }
     });
+    dialog.addEventListener("scroll", (event) => {
+      if (event.target?.dataset?.role === "edit-channel-list") markScrolling(event.target);
+    }, true);
     document.body.appendChild(dialog);
   }
 
@@ -434,22 +478,23 @@
     return data.createAPIKey;
   }
 
-  async function updateExistingKeyBinding() {
-    await bindChannelToKey(selectedKeyID, currentChannelID());
-    setStatus("已更新选中 Key 的渠道绑定");
+  async function updateExistingKeyBinding(mode) {
+    const result = await bindChannelToKey(selectedKeyID, currentChannelID(), mode);
+    if (mode === "append" && result.alreadyBound) setStatus("当前渠道已在选中 Key 的绑定列表中");
+    else setStatus(mode === "replace" ? "已替换选中 Key 的渠道绑定" : "已追加当前渠道到选中 Key");
   }
 
   async function createKeyAndBind() {
     const name = getValue("new-key-name").trim();
     if (!name) throw new Error("请先填写新 Key 名称");
     const key = await createKey(name);
-    await bindChannelToKey(key.id, currentChannelID());
+    await bindChannelToKey(key.id, currentChannelID(), "replace");
     await loadKeys(true);
     setCreatedKeyValue(apiKeyValue(key));
     setStatus(`已新建并绑定：${key.name || name}`);
   }
 
-  async function bindChannelToKey(keyID, channelID) {
+  async function bindChannelToKey(keyID, channelID, mode = "replace") {
     if (!keyID) throw new Error("请选择 API Key");
     if (!channelID) throw new Error("请选择渠道");
     setStatus("正在读取当前 Key 配置");
@@ -458,17 +503,26 @@
     if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
     if (!numericChannelID) throw new Error(`渠道 ID 无效：${channelID}`);
     setStatus("正在写入渠道绑定");
-    await graphql(queries.updateProfiles, { id: keyID, input: buildProfilesInput(data.node.profiles, numericChannelID) }, "UpdateAPIKeyProfiles");
+    const input = buildProfilesInput(data.node.profiles, numericChannelID, mode);
+    await graphql(queries.updateProfiles, { id: keyID, input }, "UpdateAPIKeyProfiles");
+    return { alreadyBound: mode === "append" && getActiveProfile(data.node.profiles).channelIDs?.includes(numericChannelID) };
   }
 
-  function buildProfilesInput(profilesPayload, channelID) {
+  function buildProfilesInput(profilesPayload, channelID, mode = "replace") {
+    const targetIDs = mode === "append"
+      ? uniqueChannelIDs([...currentProfileChannelIDs(profilesPayload), channelID])
+      : [channelID];
+    return buildProfilesInputWithChannelIDs(profilesPayload, targetIDs);
+  }
+
+  function buildProfilesInputWithChannelIDs(profilesPayload, channelIDs) {
     const activeProfile = profilesPayload.activeProfile || "default";
     const profiles = Array.isArray(profilesPayload.profiles) && profilesPayload.profiles.length
       ? profilesPayload.profiles.map((profile) => ({ ...profile }))
       : [{ name: activeProfile }];
     const target = profiles.find((profile) => profile.name === activeProfile) || profiles[0];
     target.name = target.name || activeProfile;
-    target.channelIDs = [channelID];
+    target.channelIDs = uniqueChannelIDs(channelIDs);
     target.channelTags = Array.isArray(target.channelTags) ? target.channelTags : [];
     target.channelTagsMatchMode = target.channelTagsMatchMode || "any";
     target.modelMappings = Array.isArray(target.modelMappings) ? target.modelMappings : [];
@@ -476,6 +530,28 @@
     target.channelBindingMode = "manual";
     target.dynamicChannelStrategy = null;
     return { activeProfile, profiles };
+  }
+
+  function getActiveProfile(profilesPayload) {
+    const activeProfile = profilesPayload?.activeProfile || "default";
+    const profiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
+    return profiles.find((profile) => profile.name === activeProfile) || profiles[0] || {};
+  }
+
+  function currentProfileChannelIDs(profilesPayload) {
+    return uniqueChannelIDs(getActiveProfile(profilesPayload).channelIDs || []);
+  }
+
+  function uniqueChannelIDs(channelIDs) {
+    const ids = [];
+    const seen = new Set();
+    for (const id of channelIDs || []) {
+      const numericID = extractNumericChannelID(id);
+      if (!numericID || seen.has(numericID)) continue;
+      seen.add(numericID);
+      ids.push(numericID);
+    }
+    return ids;
   }
 
   function renderKeyOptions() {
@@ -503,6 +579,85 @@
     const channelID = document.getElementById(DIALOG_ID)?.dataset?.channelId || "";
     if (!channelID) throw new Error("未读取到当前渠道 ID");
     return channelID;
+  }
+
+  async function openEditPanel() {
+    if (!selectedKeyID) throw new Error("请先选择 API Key");
+    const channelID = currentChannelID();
+    const current = keysCache.find((key) => key.id === selectedKeyID);
+    const dialog = document.getElementById(DIALOG_ID);
+    if (!dialog) return;
+    showEditPanel();
+    setEditStatus("正在加载绑定渠道");
+    const keyLabelEl = dialog.querySelector("[data-role='edit-key-label']");
+    const channelLabelEl = dialog.querySelector("[data-role='edit-channel-label']");
+    if (keyLabelEl) keyLabelEl.textContent = current ? keyLabel(current) : selectedKeyID;
+    if (channelLabelEl) channelLabelEl.textContent = channelLabel(channelID);
+    const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
+    if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
+    editChannelIDs = currentProfileChannelIDs(data.node.profiles);
+    renderEditChannelList();
+    setEditStatus("");
+  }
+
+  function showEditPanel() {
+    closeKeyMenu();
+    showViewPanel("edit");
+  }
+
+  function showMainPanel() {
+    editChannelIDs = [];
+    showViewPanel("main");
+    setEditStatus("");
+  }
+
+  function showViewPanel(view) {
+    document.querySelectorAll(`#${DIALOG_ID} [data-view-panel]`).forEach((panel) => {
+      panel.hidden = panel.dataset.viewPanel !== view;
+    });
+  }
+
+  function addCurrentChannelToEditList() {
+    const numericID = extractNumericChannelID(currentChannelID());
+    if (!numericID) throw new Error("未读取到当前渠道 ID");
+    if (editChannelIDs.includes(numericID)) {
+      setEditStatus("当前渠道已在列表中");
+      return;
+    }
+    editChannelIDs = [...editChannelIDs, numericID];
+    renderEditChannelList();
+    setEditStatus("已添加，保存后生效");
+  }
+
+  function removeEditChannel(channelID) {
+    const numericID = extractNumericChannelID(channelID);
+    editChannelIDs = editChannelIDs.filter((id) => id !== numericID);
+    renderEditChannelList();
+    setEditStatus("已移除，保存后生效");
+  }
+
+  async function saveEditBindings() {
+    if (!selectedKeyID) throw new Error("请先选择 API Key");
+    setEditStatus("正在保存绑定渠道");
+    const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
+    if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
+    const input = buildProfilesInputWithChannelIDs(data.node.profiles, editChannelIDs);
+    await graphql(queries.updateProfiles, { id: selectedKeyID, input }, "UpdateAPIKeyProfiles");
+    setEditStatus("已保存绑定渠道");
+  }
+
+  function renderEditChannelList() {
+    const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
+    if (!list) return;
+    list.innerHTML = editChannelIDs.length
+      ? editChannelIDs.map((id) => `<div class="hkb-channel-row"><span>${escapeHtml(channelLabel(id))}</span><button type="button" class="hkb-remove" data-action="edit-remove-channel" data-channel-id="${escapeHtml(id)}">移除</button></div>`).join("")
+      : `<div class="hkb-empty">暂无绑定渠道</div>`;
+  }
+
+  function channelLabel(channelID) {
+    const id = String(channelID || "");
+    const channel = channelCache.get(id) || channelCache.get(String(extractNumericChannelID(id) || ""));
+    return channel?.name || (id ? `Channel #${extractNumericChannelID(id) || id}` : "未读取到当前渠道");
   }
 
   function apiKeyValue(key) { return String(key?.key || ""); }
@@ -584,9 +739,18 @@
   function setStatus(message) {
     const status = document.querySelector(`#${DIALOG_ID} [data-role="status"]`); if (status) status.textContent = message;
   }
+  function setEditStatus(message) {
+    const status = document.querySelector(`#${DIALOG_ID} [data-role="edit-status"]`); if (status) status.textContent = message;
+  }
   function setBusy(isBusy) {
     document.querySelectorAll(`#${DIALOG_ID} button`).forEach((button) => { button.disabled = isBusy; });
     if (!isBusy) syncKeyPicker();
+  }
+
+  function markScrolling(node) {
+    node.classList.add("is-scrolling");
+    clearTimeout(node.__hkbScrollTimer);
+    node.__hkbScrollTimer = setTimeout(() => node.classList.remove("is-scrolling"), 700);
   }
 
   function escapeHtml(value) {
@@ -647,6 +811,8 @@
       isCreateApiButtonText,
       rememberChannelsFromPayload,
       apiKeyValue,
+      buildProfilesInput,
+      buildProfilesInputWithChannelIDs,
     };
   }
 })();
