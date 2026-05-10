@@ -156,6 +156,8 @@ assert.equal(source.includes(".hkb-card{width:min(460px,100%);height:388px"), tr
 assert.equal(source.includes("[data-view-panel]{height:100%;display:grid;grid-template-rows:auto 1fr auto}"), true);
 assert.equal(source.includes("button:not(.hkb-icon-btn){box-sizing:border-box;height:36px;min-height:36px;line-height:20px"), true);
 assert.equal(source.includes("hkb-edit-body{display:grid;grid-template-rows:auto auto minmax(0,1fr)"), true);
+assert.equal(source.includes("hkb-edit-row{display:grid;grid-template-columns:72px minmax(0,1fr)"), true);
+assert.equal(source.includes("hkb-edit-actions{border-top:none;padding-top:18px"), true);
 assert.equal(source.includes('data-role="edit-key-picker"'), true);
 assert.equal(source.includes('data-role="edit-key-label"'), true);
 assert.equal(source.includes("hkb-edit-list{height:100%;min-height:92px"), true);

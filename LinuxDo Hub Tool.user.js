@@ -273,7 +273,11 @@
       #${DIALOG_ID} [data-view-panel]{height:100%;display:grid;grid-template-rows:auto 1fr auto}
       #${DIALOG_ID} [data-view-panel][hidden]{display:none}
       #${DIALOG_ID} .hkb-grid{display:grid;gap:16px;min-height:0;align-content:start}
-      #${DIALOG_ID} .hkb-edit-body{display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:14px;min-height:0;padding-top:2px}
+      #${DIALOG_ID} .hkb-edit-body{display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:14px;min-height:0;padding-top:4px}
+      #${DIALOG_ID} .hkb-edit-row{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:12px;min-height:0}
+      #${DIALOG_ID} .hkb-edit-row .hkb-label{align-self:center}
+      #${DIALOG_ID} .hkb-edit-row-list{align-items:start}
+      #${DIALOG_ID} .hkb-edit-row-list .hkb-label{padding-top:10px}
       #${DIALOG_ID} [data-key-panel]{min-height:70px}
       #${DIALOG_ID} .hkb-field{display:grid;gap:6px}
       #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:650;color:#374151}
@@ -286,12 +290,13 @@
       #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 18px 48px -24px rgba(15,23,42,.55),0 8px 20px -18px rgba(15,23,42,.45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
       #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:#111827;text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:#f3f4f6}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:#111827;font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:#64748b;padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:#0f172a;background:#f1f5f9}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(15,23,42,.12)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
-      #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:8px;margin:-6px 0 2px -8px;font-size:18px;font-weight:700;color:#111827}
-      #${DIALOG_ID} .hkb-back{height:30px;width:30px;min-height:30px}
+      #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:#111827}
+      #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
       #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:#cbd5e1 transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:#cbd5e1}
       #${DIALOG_ID} .hkb-channel-row{min-height:34px;display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;color:#111827;font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:#fff}#${DIALOG_ID} .hkb-channel-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-remove{border:none;background:transparent;color:#6b7280;padding:0 6px;min-height:26px;font-size:12px}#${DIALOG_ID} .hkb-remove:hover{background:#f3f4f6;color:#111827}
       #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:#9ca3af;font-size:13px}
       #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid #f3f4f6}
+      #${DIALOG_ID} .hkb-edit-actions{border-top:none;padding-top:18px}
       #${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{display:flex;align-items:center;gap:8px}
       #${DIALOG_ID} .hkb-status{color:#6b7280;font-size:12px;line-height:16px;flex:1;min-width:0}
       #${DIALOG_ID} button:not(.hkb-icon-btn){box-sizing:border-box;height:36px;min-height:36px;line-height:20px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
@@ -387,11 +392,11 @@
       <div class="hkb-main" data-view-panel="edit" hidden>
         <div class="hkb-edit-title"><button type="button" class="hkb-icon-btn hkb-back" data-action="close-edit" title="返回" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span>编辑绑定渠道</span></div>
         <div class="hkb-edit-body">
-          <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-key-picker" data-role="edit-key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="edit-key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="edit-key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="edit-key-menu" role="listbox" hidden></ul></div></div>
-          <div class="hkb-field"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="edit-channel-label"></div></div>
-          <div class="hkb-field"><span class="hkb-label">已绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
+          <div class="hkb-edit-row"><span class="hkb-label">API Key</span><div class="hkb-key-picker" data-role="edit-key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="edit-key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="edit-key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="edit-key-menu" role="listbox" hidden></ul></div></div>
+          <div class="hkb-edit-row"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="edit-channel-label"></div></div>
+          <div class="hkb-edit-row hkb-edit-row-list"><span class="hkb-label">已绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
         </div>
-        <div class="hkb-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="edit-add-current">添加当前渠道</button></div><div class="hkb-status" data-role="edit-status"></div><div class="hkb-action-right"><button type="button" class="hkb-secondary" data-action="save-edit">保存修改</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
+        <div class="hkb-actions hkb-edit-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="edit-add-current">添加当前渠道</button></div><div class="hkb-status" data-role="edit-status"></div><div class="hkb-action-right"><button type="button" class="hkb-secondary" data-action="save-edit">保存修改</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
       </div>
     </div>`;
     dialog.addEventListener("click", (event) => {
