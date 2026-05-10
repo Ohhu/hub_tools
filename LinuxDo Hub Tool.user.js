@@ -18,9 +18,11 @@
   const PROJECT_ID = "gid://axonhub/Project/1";
   const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
   const DIALOG_ID = `${PANEL_ID}-dialog`;
+  const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
   const nativeFetch = window.fetch.bind(window);
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
   const channelCache = new Map(), channelNameCache = new Map();
+  const modelProviderPriceCache = new Map();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
   let editChannelIDs = [];
   let lastPathname = location.pathname;
@@ -34,11 +36,12 @@
   };
 
   window.fetch = async function patchedFetch(input, init) {
-    const response = await nativeFetch(input, init);
-    rememberGraphqlContext(input, init);
+    const nextRequest = withMarketplaceModelPricingFields(input, init);
+    const response = await nativeFetch(nextRequest.input, nextRequest.init);
+    rememberGraphqlContext(nextRequest.input, nextRequest.init);
     rememberResponseChannels(response);
     schedulePanel();
-    return response;
+    return wrapMarketplaceChannelsResponse(nextRequest.input, nextRequest.init, response);
   };
 
   function rememberGraphqlContext(input, init) {
@@ -59,8 +62,274 @@
     if (!type.includes("application/json")) return;
     response.clone().json().then((payload) => {
       rememberChannelsFromPayload(payload);
+      rememberModelProviderPricesFromPayload(payload);
       schedulePanel();
     }).catch(() => {});
+  }
+
+  function wrapMarketplaceChannelsResponse(input, init, response) {
+    if (!shouldFilterMarketplaceResponse(input, init, response)) return response;
+    return new Proxy(response, {
+      get(target, prop) {
+        if (prop === "json") {
+          return async () => filterMarketplaceResponseJson(input, init, target, currentPriceFilter());
+        }
+        const value = target[prop];
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
+  async function filterMarketplaceResponseJson(input, init, response, price) {
+    const payload = await response.clone().json();
+    const mode = normalizePriceFilter(price);
+    if (mode === "all") return payload;
+    if (isMarketplaceChannelsUrl(requestUrl(input))) {
+      const filteredPayload = await loadFilteredMarketplaceChannelsPayload(input, init, payload, mode);
+      rememberChannelsFromPayload(filteredPayload);
+      return filteredPayload;
+    }
+    const filteredPayload = filterMarketplacePayloadByPrice(payload, mode);
+    rememberChannelsFromPayload(filteredPayload);
+    return filteredPayload;
+  }
+
+  function shouldFilterMarketplaceResponse(input, init, response) {
+    if (isMarketplaceChannelsUrl(requestUrl(input))) return true;
+    return isGraphqlMarketplaceModelRequest(input, init, response);
+  }
+
+  function isMarketplaceChannelsUrl(url) {
+    const value = String(url || "");
+    const path = value.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
+    return path === "/admin/marketplace/channels";
+  }
+
+  function isGraphqlMarketplaceModelRequest(input, init, response) {
+    const path = requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
+    if (path !== GRAPHQL_PATH) return false;
+    if (!location.pathname.startsWith("/marketplace/models/")) return false;
+    if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
+    const body = requestBodyText(input, init);
+    return body.includes("MarketplaceModel") || body.includes("marketplaceModel");
+  }
+
+  function requestUrl(input) {
+    return String(typeof input === "string" ? input : input?.url || "");
+  }
+
+  function requestBodyText(input, init) {
+    return String(init?.body ?? input?.body ?? "");
+  }
+
+  function withMarketplaceModelPricingFields(input, init) {
+    if (!isMarketplaceModelRequestBody(requestBodyText(input, init))) return { input, init };
+    const bodyText = requestBodyText(input, init);
+    let body;
+    try {
+      body = JSON.parse(bodyText);
+    } catch {
+      return { input, init };
+    }
+    const query = ensurePricingFields(body.query);
+    if (query === body.query) return { input, init };
+    const nextInit = {
+      ...init,
+      body: JSON.stringify({ ...body, query }),
+    };
+    return { input, init: nextInit };
+  }
+
+  function isMarketplaceModelRequestBody(bodyText) {
+    return String(bodyText || "").includes("MarketplaceModel")
+      || String(bodyText || "").includes("marketplaceModel");
+  }
+
+  function ensurePricingFields(query) {
+    if (!query || (/flatFee\b/.test(query) && /\bmode\b/.test(query))) return query;
+    return String(query).replace(/(pricing\s*\{)([\s\S]*?usagePerUnit\b)/, (match, open, rest) => {
+      const additions = [
+        /\bmode\b/.test(match) ? "" : "\n          mode",
+        /\bflatFee\b/.test(match) ? "" : "\n          flatFee",
+      ].join("");
+      return `${open}${additions}${rest}`;
+    });
+  }
+
+  function normalizePriceFilter(value) {
+    return value === "free" || value === "paid" ? value : "all";
+  }
+
+  function currentPriceFilter() {
+    return normalizePriceFilter(new URL(location.href).searchParams.get("price"));
+  }
+
+  function currentMarketplaceModelID() {
+    const match = location.pathname.match(/^\/marketplace\/models\/([^/?#]+)/);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function marketplaceModelIDFromPayload(payload) {
+    return payload?.data?.marketplaceModel?.modelID || currentMarketplaceModelID();
+  }
+
+  function filterMarketplacePayloadByPrice(payload, price) {
+    const mode = normalizePriceFilter(price);
+    if (mode === "all") return payload;
+    if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
+      const providers = payload.data.marketplaceModel.providers.filter((provider) =>
+        priceMatchesChannelForModel(provider?.channel, mode),
+      );
+      return {
+        ...payload,
+        data: {
+          ...payload.data,
+          marketplaceModel: {
+            ...payload.data.marketplaceModel,
+            providers,
+          },
+        },
+      };
+    }
+    if (!Array.isArray(payload?.items)) return payload;
+    const items = filterMarketplaceChannelItems(payload.items, mode);
+    return {
+      ...payload,
+      items,
+      totalCount: items.length,
+      totalPages: 1,
+      page: 1,
+    };
+  }
+
+  function priceMatchesChannel(channel, mode) {
+    const freeState = marketplaceChannelFreeState(channel);
+    return mode === "free" ? freeState === true : freeState === false;
+  }
+
+  function priceMatchesChannelForModel(channel, mode) {
+    const freeState = channelFreeStateForModel(channel);
+    return mode === "free" ? freeState === true : freeState === false;
+  }
+
+  function marketplaceChannelFreeState(channel) {
+    if (typeof channel?.priceSummary?.allFree === "boolean") return channel.priceSummary.allFree;
+    return null;
+  }
+
+  function channelFreeStateForModel(channel) {
+    if (!Array.isArray(channel?.channelModelPrices)) return true;
+    const prices = channel.channelModelPrices;
+    if (prices.length === 0) return true;
+    return prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items));
+  }
+
+  function modelPriceItemsFree(items) {
+    return (items || []).every((item) => {
+      const pricing = item?.pricing || {};
+      return parsePositiveNumber(pricing.usagePerUnit) <= 0
+        && parsePositiveNumber(pricing.flatFee) <= 0;
+    });
+  }
+
+  function parsePositiveNumber(value) {
+    const number = Number.parseFloat(value);
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  }
+
+  function normalizeModelID(modelID) {
+    return String(modelID || "").trim().toLowerCase();
+  }
+
+  async function loadFilteredMarketplaceChannelsPayload(input, init, firstPayload, mode) {
+    if (!Array.isArray(firstPayload?.items)) return firstPayload;
+    const first = marketplacePageSize(input, firstPayload);
+    const targetPage = marketplacePageNumber(input, firstPayload);
+    const needed = Math.max(first, targetPage * first);
+    const items = [];
+    let sourcePage = targetPage === 1 ? firstPayload : await fetchMarketplaceChannelsPage(input, init, 1);
+    let pageNumber = marketplacePayloadPageNumber(sourcePage, input);
+    let maxPages = Math.max(marketplacePayloadTotalPages(firstPayload), marketplacePayloadTotalPages(sourcePage));
+    while (sourcePage && pageNumber <= maxPages) {
+      items.push(...filterMarketplaceChannelItems(sourcePage.items, mode));
+      if (shouldStopMarketplacePriceScan(sourcePage.items, mode) || items.length >= needed || pageNumber >= maxPages) break;
+      if (!Array.isArray(sourcePage.items) || sourcePage.items.length === 0) break;
+      pageNumber += 1;
+      sourcePage = await fetchMarketplaceChannelsPage(input, init, pageNumber);
+      maxPages = Math.max(maxPages, marketplacePayloadTotalPages(sourcePage));
+    }
+    const pageItems = items.slice((targetPage - 1) * first, targetPage * first);
+    const hasMore = pageNumber < maxPages && Array.isArray(sourcePage?.items) && sourcePage.items.length > 0;
+    const filteredTotal = items.length + (hasMore ? 1 : 0);
+    return {
+      ...firstPayload,
+      items: pageItems,
+      page: targetPage,
+      totalCount: filteredTotal,
+      totalPages: Math.max(1, Math.ceil(filteredTotal / first)),
+    };
+  }
+
+  function filterMarketplaceChannelItems(items, mode) {
+    return (items || []).filter((item) => priceMatchesChannel(item, mode));
+  }
+
+  function marketplacePageSize(input, payload) {
+    const first = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("first") || "", 10);
+    return Number.isFinite(first) && first > 0 ? first : Math.max(1, Number(payload?.items?.length) || 20);
+  }
+
+  function marketplacePageNumber(input, payload) {
+    const page = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("page") || "", 10);
+    return Number.isFinite(page) && page > 0 ? page : marketplacePayloadPageNumber(payload, input);
+  }
+
+  function marketplacePayloadPageNumber(payload, input) {
+    const page = Number(payload?.page);
+    if (Number.isFinite(page) && page > 0) return page;
+    const urlPage = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("page") || "", 10);
+    return Number.isFinite(urlPage) && urlPage > 0 ? urlPage : 1;
+  }
+
+  function marketplacePayloadTotalPages(payload) {
+    const totalPages = Number(payload?.totalPages);
+    if (Number.isFinite(totalPages) && totalPages > 0) return totalPages;
+    return Array.isArray(payload?.items) && payload.items.length ? Number.MAX_SAFE_INTEGER : 1;
+  }
+
+  async function fetchMarketplaceChannelsPage(input, init, page) {
+    const url = marketplaceChannelsScanUrl(requestUrl(input), currentPriceFilter(), page);
+    const response = await nativeFetch(url, marketplaceChannelsFetchInit(input, init));
+    return response.json();
+  }
+
+  function marketplaceChannelsScanUrl(url, mode, page) {
+    const nextUrl = new URL(url, location.origin);
+    nextUrl.searchParams.set("page", String(page));
+    if (normalizePriceFilter(mode) === "free") nextUrl.searchParams.set("sort", "multiplier_asc");
+    return nextUrl;
+  }
+
+  function shouldStopMarketplacePriceScan(items, mode) {
+    if (normalizePriceFilter(mode) !== "free") return false;
+    return (items || []).some((item) => marketplaceChannelFreeState(item) === false);
+  }
+
+  function marketplaceChannelsUrl(input) {
+    return new URL(requestUrl(input), location.origin);
+  }
+
+  function marketplaceChannelsFetchInit(input, init) {
+    const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
+    const method = init?.method || request?.method || "GET";
+    const nextInit = {
+      ...init,
+      method,
+      credentials: init?.credentials || request?.credentials || "same-origin",
+      headers: init?.headers || request?.headers,
+    };
+    if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") delete nextInit.body;
+    return nextInit;
   }
 
   function extractNumericChannelID(channelID) {
@@ -101,10 +370,18 @@
   function ensurePanel() {
     injectStyle();
     for (const anchor of findCreateApiButtons()) replaceCreateApiButton(anchor);
+    insertPriceFilter();
+    applyVisiblePriceFilter();
   }
 
   function findCreateApiButtons() {
     return Array.from(document.querySelectorAll("main button")).filter(isApiKeyActionButton);
+  }
+
+  function findChannelActionButtons() {
+    return Array.from(document.querySelectorAll("main button")).filter((button) =>
+      isApiKeyActionButton(button) || isTriggerButton(button),
+    );
   }
 
   function isApiKeyActionButton(node) {
@@ -124,6 +401,174 @@
     if (!channel.id) return;
     const button = createTrigger(anchor, channel);
     anchor.replaceWith(button);
+  }
+
+  function insertPriceFilter() {
+    if (!isMarketplaceChannelsTabActive()) {
+      document.getElementById(PRICE_FIELD_ID)?.remove();
+      return;
+    }
+    const anchors = findMarketplaceFilterFields();
+    const anchor = anchors.tags || anchors.sort;
+    if (!anchor) return;
+    let field = document.getElementById(PRICE_FIELD_ID);
+    if (!field) field = createPriceFilterField();
+    syncPriceFilterField(field);
+    if (anchors.tags) {
+      if (field.parentElement !== anchors.tags.parentElement || field.previousElementSibling !== anchors.tags) {
+        anchors.tags.insertAdjacentElement("afterend", field);
+      }
+      return;
+    }
+    if (field.parentElement !== anchor.parentElement || field.nextElementSibling !== anchor) {
+      anchor.insertAdjacentElement("beforebegin", field);
+    }
+  }
+
+  function isMarketplaceChannelsTabActive() {
+    if (!location.pathname.startsWith("/marketplace")) return false;
+    const selected = document.querySelector('[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]');
+    return !selected || /渠道广场|channel/i.test(String(selected.textContent || ""));
+  }
+
+  function findMarketplaceFilterFields(fields = Array.from(document.querySelectorAll("main label, main p, main div, main span"))) {
+    return {
+      tags: filterFieldByLabel(fields, /^(标签|tags?)$/i),
+      sort: filterFieldByLabel(fields, /^(排序|sort)$/i),
+    };
+  }
+
+  function filterFieldByLabel(elements, pattern) {
+    for (const label of elements) {
+      if (!isFilterLabelText(label.textContent, pattern)) continue;
+      const field = closestFilterField(label);
+      if (hasFilterControl(field)) return field;
+    }
+    return null;
+  }
+
+  function isFilterLabelText(text, pattern) {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    return normalized.length <= 24 && pattern.test(normalized);
+  }
+
+  function closestFilterField(label) {
+    let current = label;
+    while (current && current !== document.body) {
+      if (hasFilterControl(current)) return current;
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function hasFilterControl(field) {
+    return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
+  }
+
+  function createPriceFilterField() {
+    const field = document.createElement("div");
+    field.id = PRICE_FIELD_ID;
+    field.dataset.hubToolPriceFilter = "true";
+    field.innerHTML = `<p class="hkb-price-label">价格</p>
+      <div class="hkb-price-group" role="group" aria-label="价格筛选">
+        ${[
+          ["all", "全部"],
+          ["free", "免费"],
+          ["paid", "付费"],
+        ].map(([value, label]) => `<button type="button" data-role="price-filter" data-price="${value}">${label}</button>`).join("")}
+      </div>`;
+    field.addEventListener("click", handlePriceFilterClick);
+    return field;
+  }
+
+  function syncPriceFilterField(field) {
+    if (!field) return;
+    const price = currentPriceFilter();
+    field.querySelectorAll("[data-price]").forEach((button) => {
+      const selected = button.dataset.price === price;
+      button.setAttribute("aria-pressed", String(selected));
+    });
+  }
+
+  function handlePriceFilterClick(event) {
+    const button = event.target?.closest?.("[data-price]");
+    if (!button) return;
+    setPriceFilter(button.dataset.price);
+  }
+
+  function handlePriceFilterChange(event) {
+    setPriceFilter(event.target?.value);
+  }
+
+  function setPriceFilter(value) {
+    const price = normalizePriceFilter(value);
+    const url = new URL(location.href);
+    if (price === "all") url.searchParams.delete("price");
+    else url.searchParams.set("price", price);
+    if (url.href === location.href) return;
+    history.replaceState(history.state, "", url);
+    syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
+    applyVisiblePriceFilter();
+    triggerMarketplaceRefresh();
+  }
+
+  function triggerMarketplaceRefresh() {
+    if (location.pathname.startsWith("/marketplace/models/")) {
+      scheduleRouteScans();
+      return;
+    }
+    const input = findMarketplaceSearchInput();
+    if (!input) {
+      scheduleRouteScans();
+      return;
+    }
+    nudgeSearchInput(input);
+  }
+
+  function nudgeSearchInput(input) {
+    const value = input.value || "";
+    setInputValue(input, `${value} `);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setTimeout(() => {
+      setInputValue(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      setTimeout(scheduleRouteScans, 0);
+    }, 0);
+  }
+
+  function setInputValue(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (setter) setter.call(input, value);
+    else input.value = value;
+  }
+
+  function findMarketplaceSearchInput() {
+    return Array.from(document.querySelectorAll("main input")).find((input) =>
+      /渠道名称|支持模型|search/i.test(String(input.placeholder || "")),
+    ) || null;
+  }
+
+  function applyVisiblePriceFilter() {
+    if (!location.pathname.startsWith("/marketplace/models/")) return;
+    const mode = currentPriceFilter();
+    for (const button of findChannelActionButtons()) {
+      const context = findChannelContext(button);
+      const channel = findActionButtonChannel(button);
+      const state = modelProviderFreeState(channel);
+      const hidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+      if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
+    }
+  }
+
+  function findActionButtonChannel(button) {
+    if (isTriggerButton(button)) {
+      return { id: button.dataset.channelId || "", name: button.dataset.channelName || "" };
+    }
+    return findChannelFromButton(button);
+  }
+
+  function priceStateMatches(freeState, mode) {
+    return mode === "free" ? freeState === true : freeState === false;
   }
 
   function createTrigger(anchor, channel) {
@@ -249,6 +694,39 @@
     for (const child of Object.values(payload)) rememberChannelsFromPayload(child, seen);
   }
 
+  function rememberModelProviderPricesFromPayload(payload) {
+    const modelID = marketplaceModelIDFromPayload(payload);
+    const providers = payload?.data?.marketplaceModel?.providers;
+    if (!modelID || !Array.isArray(providers)) return;
+    for (const provider of providers) {
+      const channel = provider?.channel;
+      if (!channel?.id) continue;
+      const state = channelFreeStateForModel(channel);
+      for (const key of modelProviderCacheKeys(channel.id, modelID)) modelProviderPriceCache.set(key, state);
+    }
+  }
+
+  function modelProviderFreeState(channel) {
+    if (!channel?.id) return null;
+    const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
+    return modelProviderPriceCache.has(key) ? modelProviderPriceCache.get(key) : null;
+  }
+
+  function modelProviderCacheKey(channelID, modelID) {
+    const numericID = extractNumericChannelID(channelID);
+    return `${numericID || String(channelID || "")}:${normalizeModelID(modelID)}`;
+  }
+
+  function modelProviderCacheKeys(channelID, modelID) {
+    const keys = new Set([modelProviderCacheKey(channelID, modelID)]);
+    const numericID = extractNumericChannelID(channelID);
+    if (numericID) {
+      keys.add(`${numericID}:${normalizeModelID(modelID)}`);
+      keys.add(`gid://axonhub/channel/${numericID}:${normalizeModelID(modelID)}`);
+    }
+    return Array.from(keys);
+  }
+
   function rememberChannel(channel) {
     if (!channel?.id || !channel?.name) return;
     const item = { id: String(channel.id), name: String(channel.name) };
@@ -266,6 +744,13 @@
     if (document.getElementById(`${PANEL_ID}-style`)) return;
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
+      #${PRICE_FIELD_ID}{display:grid;gap:8px;min-width:180px}
+      #${PRICE_FIELD_ID} .hkb-price-label{margin:0;color:inherit;font:inherit;font-size:14px;font-weight:500;line-height:20px}
+      #${PRICE_FIELD_ID} .hkb-price-group{display:inline-flex;align-items:center;gap:2px;width:max-content;border:1px solid hsl(214.3 31.8% 91.4%);border-radius:8px;background:hsl(0 0% 100%);padding:3px}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{height:32px;min-height:32px;border:0;border-radius:6px;background:transparent;color:inherit;padding:0 10px;font:inherit;font-size:13px;font-weight:500;line-height:20px;cursor:pointer;white-space:nowrap}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:hsl(210 40% 96.1%)}
+      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{background:hsl(222.2 47.4% 11.2%);color:hsl(210 40% 98%)}
+      [data-hub-tool-price-hidden="true"]{display:none!important}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.48);padding:16px;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
       #${DIALOG_ID} .hkb-card{width:min(460px,100%);height:388px;box-sizing:border-box;background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgba(15,23,42,.55),0 10px 24px -20px rgba(15,23,42,.35)}
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
@@ -829,6 +1314,13 @@
       apiKeyValue,
       buildProfilesInput,
       buildProfilesInputWithChannelIDs,
+      findMarketplaceFilterFields,
+      filterMarketplacePayloadByPrice,
+      ensurePricingFields,
+      marketplaceChannelsScanUrl,
+      normalizePriceFilter,
+      requestBodyText,
+      rememberModelProviderPricesFromPayload,
     };
   }
 })();

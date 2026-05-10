@@ -71,6 +71,11 @@ class FakeElement {
           child.attributes["data-slot"] === "card-title"
         ) {
           results.push(child);
+        } else if (
+          selector === "[role=\"combobox\"]" &&
+          child.attributes.role === "combobox"
+        ) {
+          results.push(child);
         } else if (selector === "*" || selector === "button") {
           results.push(child);
         }
@@ -166,6 +171,8 @@ assert.equal(source.includes('>↻</button>'), false);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), true);
 assert.equal(source.includes("node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername"), true);
 assert.equal(source.includes("async function loadSelectedKeyValue"), false);
+assert.equal(source.includes("price-filter"), true);
+assert.equal(source.includes("function insertPriceFilter"), true);
 
 {
   const input = {
@@ -317,6 +324,102 @@ assert.equal(source.includes("async function loadSelectedKeyValue"), false);
     id: "2875",
     name: "React 卡片渠道",
   });
+}
+
+{
+  const payload = {
+    items: [
+      { name: "free", priceSummary: { allFree: true } },
+      { name: "paid", priceSummary: { allFree: false } },
+      { name: "unknown" },
+    ],
+    totalCount: 3,
+    totalPages: 1,
+  };
+  assert.deepEqual(plain(helpers.filterMarketplacePayloadByPrice(payload, "all")).items.map((item) => item.name), ["free", "paid", "unknown"]);
+  assert.deepEqual(plain(helpers.filterMarketplacePayloadByPrice(payload, "free")).items.map((item) => item.name), ["free"]);
+  assert.deepEqual(plain(helpers.filterMarketplacePayloadByPrice(payload, "paid")).items.map((item) => item.name), ["paid"]);
+}
+
+{
+  const payload = {
+    data: {
+      marketplaceModel: {
+        modelID: "gpt-5.4",
+        providers: [
+          { channel: { name: "no-current-price", channelModelPrices: [] } },
+          { channel: { name: "current-free", channelModelPrices: [{ modelID: "openai/GPT-5.4", price: { items: [{ pricing: { usagePerUnit: "0" } }] } }] } },
+          { channel: { name: "current-paid-by-prefix", channelModelPrices: [{ modelID: "bbg/gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "100" } }] } }] } },
+          { channel: { name: "free-with-multiplier", channelModelPrices: [{ modelID: "GPT-5.4", price: { items: [{ multiplier: 20, pricing: { usagePerUnit: "0" } }] } }] } },
+          { channel: { name: "paid-by-flat-fee", channelModelPrices: [{ modelID: "GPT-5.4", price: { items: [{ multiplier: 20, pricing: { mode: "flat_fee", flatFee: "100", usagePerUnit: "0" } }] } }] } },
+          {
+            channel: {
+              name: "other-model-paid-current-free",
+              channelModelPrices: [
+                { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } },
+                { modelID: "gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "0" } }] } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  };
+  assert.deepEqual(
+    plain(helpers.filterMarketplacePayloadByPrice(payload, "free")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    ["no-current-price", "current-free", "free-with-multiplier"],
+  );
+  assert.deepEqual(
+    plain(helpers.filterMarketplacePayloadByPrice(payload, "paid")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    ["current-paid-by-prefix", "paid-by-flat-fee", "other-model-paid-current-free"],
+  );
+}
+
+{
+  assert.equal(helpers.normalizePriceFilter("free"), "free");
+  assert.equal(helpers.normalizePriceFilter("paid"), "paid");
+  assert.equal(helpers.normalizePriceFilter("weird"), "all");
+}
+
+{
+  assert.equal(helpers.requestBodyText("https://hub.linux.do/admin/graphql", { body: "MarketplaceModel" }), "MarketplaceModel");
+  assert.equal(helpers.requestBodyText({ body: "marketplaceModel" }), "marketplaceModel");
+}
+
+{
+  const query = "query MarketplaceModel { marketplaceModel { providers { channel { channelModelPrices { price { items { pricing { usagePerUnit } } } } } } } }";
+  const nextQuery = helpers.ensurePricingFields(query);
+  assert.equal(nextQuery.includes("mode"), true);
+  assert.equal(nextQuery.includes("flatFee"), true);
+  assert.equal(helpers.ensurePricingFields(nextQuery), nextQuery);
+}
+
+{
+  const url = helpers.marketplaceChannelsScanUrl("https://hub.linux.do/admin/marketplace/channels?page=3&first=20&search=gpt-5.5&sort=created_desc", "free", 2);
+  assert.equal(url.pathname, "/admin/marketplace/channels");
+  assert.equal(url.searchParams.get("page"), "2");
+  assert.equal(url.searchParams.get("first"), "20");
+  assert.equal(url.searchParams.get("search"), "gpt-5.5");
+  assert.equal(url.searchParams.get("sort"), "multiplier_asc");
+}
+
+{
+  assert.equal(source.includes("function findChannelActionButtons"), true);
+  assert.equal(source.includes('[data-hub-tool-price-hidden="true"]'), true);
+}
+
+{
+  const fields = [];
+  const tagsField = new FakeElement();
+  const tagsLabel = new FakeElement({ text: "标签", parent: tagsField });
+  new FakeElement({ text: "全部标签", attrs: { role: "combobox" }, parent: tagsField });
+  const sortField = new FakeElement();
+  const sortLabel = new FakeElement({ text: "排序", parent: sortField });
+  new FakeElement({ text: "综合推荐", attrs: { role: "combobox" }, parent: sortField });
+  fields.push(tagsLabel, sortLabel);
+  const anchors = helpers.findMarketplaceFilterFields(fields);
+  assert.strictEqual(anchors.tags, tagsField);
+  assert.strictEqual(anchors.sort, sortField);
 }
 
 console.log("minimal binder helpers ok");
