@@ -24,6 +24,8 @@
   const channelCache = new Map(), channelNameCache = new Map();
   const modelProviderPriceCache = new Map();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
+  let selectedPriceFilter = "all";
+  let lastMarketplaceChannelsFetchAt = 0;
   let editChannelIDs = [];
   let lastPathname = location.pathname;
 
@@ -36,13 +38,24 @@
   };
 
   window.fetch = async function patchedFetch(input, init) {
-    const nextRequest = withMarketplaceModelPricingFields(input, init);
+    const sanitizedRequest = sanitizeMarketplaceChannelsRequest(input, init);
+    const nextRequest = withMarketplaceModelPricingFields(sanitizedRequest.input, sanitizedRequest.init);
+    if (isMarketplaceChannelsUrl(requestUrl(nextRequest.input))) lastMarketplaceChannelsFetchAt = Date.now();
     const response = await nativeFetch(nextRequest.input, nextRequest.init);
     rememberGraphqlContext(nextRequest.input, nextRequest.init);
     rememberResponseChannels(response);
     schedulePanel();
     return wrapMarketplaceChannelsResponse(nextRequest.input, nextRequest.init, response);
   };
+
+  function sanitizeMarketplaceChannelsRequest(input, init) {
+    if (!isMarketplaceChannelsUrl(requestUrl(input))) return { input, init };
+    const url = marketplaceChannelsUrl(input);
+    cleanMarketplaceSearchParam(url);
+    if (typeof input === "string" || input instanceof URL) return { input: url, init };
+    if (typeof Request !== "undefined" && input instanceof Request) return { input: new Request(url, input), init };
+    return { input, init };
+  }
 
   function rememberGraphqlContext(input, init) {
     const url = typeof input === "string" ? input : input?.url;
@@ -115,6 +128,7 @@
   }
 
   function requestUrl(input) {
+    if (input instanceof URL) return input.toString();
     return String(typeof input === "string" ? input : input?.url || "");
   }
 
@@ -161,7 +175,7 @@
   }
 
   function currentPriceFilter() {
-    return normalizePriceFilter(new URL(location.href).searchParams.get("price"));
+    return selectedPriceFilter;
   }
 
   function currentMarketplaceModelID() {
@@ -306,8 +320,27 @@
   function marketplaceChannelsScanUrl(url, mode, page) {
     const nextUrl = new URL(url, location.origin);
     nextUrl.searchParams.set("page", String(page));
+    cleanMarketplaceSearchParam(nextUrl);
     if (normalizePriceFilter(mode) === "free") nextUrl.searchParams.set("sort", "multiplier_asc");
     return nextUrl;
+  }
+
+  function cleanMarketplaceSearchParam(url) {
+    const search = cleanMarketplaceSearch(url.searchParams.get("search"));
+    if (search) url.searchParams.set("search", search);
+    else url.searchParams.delete("search");
+  }
+
+  function cleanMarketplaceSearch(value) {
+    return String(value || "").replace(/[\u200b-\u200d\ufeff]/g, "").trim();
+  }
+
+  function hasMarketplaceSearchMarker(value) {
+    return /[\u200b-\u200d\ufeff]/.test(String(value || ""));
+  }
+
+  function cleanText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
   }
 
   function shouldStopMarketplacePriceScan(items, mode) {
@@ -405,24 +438,23 @@
 
   function insertPriceFilter() {
     if (!isMarketplaceChannelsTabActive()) {
+      resetPriceFilterState();
       document.getElementById(PRICE_FIELD_ID)?.remove();
       return;
     }
     const anchors = findMarketplaceFilterFields();
-    const anchor = anchors.tags || anchors.sort;
+    const anchor = anchors.sort || anchors.tags;
     if (!anchor) return;
     let field = document.getElementById(PRICE_FIELD_ID);
     if (!field) field = createPriceFilterField();
+    cleanupMarketplaceSearchInput();
     syncPriceFilterField(field);
-    if (anchors.tags) {
-      if (field.parentElement !== anchors.tags.parentElement || field.previousElementSibling !== anchors.tags) {
-        anchors.tags.insertAdjacentElement("afterend", field);
-      }
-      return;
+    if (anchors.sort) {
+      if (field.parentElement !== anchor) anchor.appendChild(field);
+    } else if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
+      anchor.insertAdjacentElement("afterend", field);
     }
-    if (field.parentElement !== anchor.parentElement || field.nextElementSibling !== anchor) {
-      anchor.insertAdjacentElement("beforebegin", field);
-    }
+    alignPriceFilterWithSort(anchors.sort, field);
   }
 
   function isMarketplaceChannelsTabActive() {
@@ -465,18 +497,19 @@
     return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
   }
 
+  function alignPriceFilterWithSort(anchor, field) {
+    if (!anchor || !field) return;
+    anchor.classList?.add?.("hkb-sort-anchor");
+    const trigger = anchor.querySelector?.('[role="combobox"], button');
+    const marginBottom = Number.parseFloat(getComputedStyle(trigger || anchor).marginBottom || "0");
+    field.style.setProperty("--hkb-price-bottom", `${Number.isFinite(marginBottom) ? marginBottom : 0}px`);
+  }
+
   function createPriceFilterField() {
     const field = document.createElement("div");
     field.id = PRICE_FIELD_ID;
     field.dataset.hubToolPriceFilter = "true";
-    field.innerHTML = `<p class="hkb-price-label">价格</p>
-      <div class="hkb-price-group" role="group" aria-label="价格筛选">
-        ${[
-          ["all", "全部"],
-          ["free", "免费"],
-          ["paid", "付费"],
-        ].map(([value, label]) => `<button type="button" data-role="price-filter" data-price="${value}">${label}</button>`).join("")}
-      </div>`;
+    field.innerHTML = `<button type="button" class="hkb-price-button border-input flex items-center justify-center gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]" data-size="default" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
     field.addEventListener("click", handlePriceFilterClick);
     return field;
   }
@@ -493,7 +526,7 @@
   function handlePriceFilterClick(event) {
     const button = event.target?.closest?.("[data-price]");
     if (!button) return;
-    setPriceFilter(button.dataset.price);
+    setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
   }
 
   function handlePriceFilterChange(event) {
@@ -502,14 +535,18 @@
 
   function setPriceFilter(value) {
     const price = normalizePriceFilter(value);
-    const url = new URL(location.href);
-    if (price === "all") url.searchParams.delete("price");
-    else url.searchParams.set("price", price);
-    if (url.href === location.href) return;
-    history.replaceState(history.state, "", url);
+    if (price === selectedPriceFilter) return;
+    selectedPriceFilter = price;
     syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
     applyVisiblePriceFilter();
     triggerMarketplaceRefresh();
+  }
+
+  function cleanupLegacyPriceParam() {
+    const url = new URL(location.href);
+    if (!url.searchParams.has("price")) return;
+    url.searchParams.delete("price");
+    history.replaceState(history.state, "", url);
   }
 
   function triggerMarketplaceRefresh() {
@@ -517,23 +554,51 @@
       scheduleRouteScans();
       return;
     }
-    const input = findMarketplaceSearchInput();
-    if (!input) {
-      scheduleRouteScans();
-      return;
-    }
-    nudgeSearchInput(input);
+    const targetSort = currentPriceFilter() === "free" ? "倍率从低到高" : "综合推荐";
+    if (triggerMarketplaceSortRefresh(targetSort)) return;
+    scheduleRouteScans();
   }
 
-  function nudgeSearchInput(input) {
-    const value = input.value || "";
-    setInputValue(input, `${value} `);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+  function triggerMarketplaceSortRefresh(targetText) {
+    const trigger = findMarketplaceSortTrigger();
+    if (!trigger) return false;
+    const fetchStartedAt = lastMarketplaceChannelsFetchAt;
+    trigger.click();
     setTimeout(() => {
-      setInputValue(input, value);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      setTimeout(scheduleRouteScans, 0);
+      const option = findVisibleOptionByText(targetText);
+      if (option) option.click();
     }, 0);
+    setTimeout(() => {
+      if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
+    }, 260);
+    return true;
+  }
+
+  function resetPriceFilterState() {
+    if (selectedPriceFilter === "all") return;
+    selectedPriceFilter = "all";
+    applyVisiblePriceFilter();
+  }
+
+  function findMarketplaceSortTrigger() {
+    const anchors = findMarketplaceFilterFields();
+    return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
+  }
+
+  function findVisibleOptionByText(text) {
+    return Array.from(document.querySelectorAll('[role="option"]')).find((option) =>
+      cleanText(option.textContent) === text && isElementVisible(option),
+    ) || null;
+  }
+
+  function isElementVisible(element) {
+    return Boolean(element?.offsetParent || element?.getClientRects?.().length);
+  }
+
+  function cleanupMarketplaceSearchInput(input = findMarketplaceSearchInput()) {
+    if (!input || !hasMarketplaceSearchMarker(input.value)) return;
+    setInputValue(input, cleanMarketplaceSearch(input.value));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   function setInputValue(input, value) {
@@ -744,12 +809,13 @@
     if (document.getElementById(`${PANEL_ID}-style`)) return;
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
-      #${PRICE_FIELD_ID}{display:grid;gap:8px;min-width:180px}
-      #${PRICE_FIELD_ID} .hkb-price-label{margin:0;color:inherit;font:inherit;font-size:14px;font-weight:500;line-height:20px}
-      #${PRICE_FIELD_ID} .hkb-price-group{display:inline-flex;align-items:center;gap:2px;width:max-content;border:1px solid hsl(214.3 31.8% 91.4%);border-radius:8px;background:hsl(0 0% 100%);padding:3px}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{height:32px;min-height:32px;border:0;border-radius:6px;background:transparent;color:inherit;padding:0 10px;font:inherit;font-size:13px;font-weight:500;line-height:20px;cursor:pointer;white-space:nowrap}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:hsl(210 40% 96.1%)}
-      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{background:hsl(222.2 47.4% 11.2%);color:hsl(210 40% 98%)}
+      .hkb-sort-anchor{position:relative}
+      #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:calc(100% + 12px);bottom:var(--hkb-price-bottom,0px);display:flex;align-items:center;height:36px}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid hsl(20 5.9% 90%);border-radius:12px;background:transparent;color:hsl(20 14.3% 4.1%);padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 hsl(0 0% 0% / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:hsl(60 4.8% 95.9%)}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:hsl(20 14.3% 4.1%);box-shadow:0 0 0 3px hsl(20 14.3% 4.1% / .12)}
+      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:hsl(20 14.3% 4.1%);background:hsl(20 14.3% 4.1%);color:hsl(60 9.1% 97.8%)}
       [data-hub-tool-price-hidden="true"]{display:none!important}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.48);padding:16px;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
       #${DIALOG_ID} .hkb-card{width:min(460px,100%);height:388px;box-sizing:border-box;background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgba(15,23,42,.55),0 10px 24px -20px rgba(15,23,42,.35)}
@@ -1266,6 +1332,7 @@
 
   function startMountWatcher() {
     patchHistoryRouting();
+    cleanupLegacyPriceParam();
     scheduleRouteScans();
     new MutationObserver((mutations) => {
       if (isTargetRoute() && mutations.some(isUsefulMutation)) schedulePanel();
@@ -1318,7 +1385,10 @@
       filterMarketplacePayloadByPrice,
       ensurePricingFields,
       marketplaceChannelsScanUrl,
+      sanitizeMarketplaceChannelsRequest,
+      cleanMarketplaceSearch,
       normalizePriceFilter,
+      requestUrl,
       requestBodyText,
       rememberModelProviderPricesFromPayload,
     };

@@ -173,6 +173,23 @@ assert.equal(source.includes("node{id createdAt updatedAt user{id firstName last
 assert.equal(source.includes("async function loadSelectedKeyValue"), false);
 assert.equal(source.includes("price-filter"), true);
 assert.equal(source.includes("function insertPriceFilter"), true);
+assert.equal(source.includes('data-price="all"'), false);
+assert.equal(source.includes('data-price="paid"'), false);
+assert.equal(source.includes('data-price="free"'), true);
+assert.equal(source.includes("hkb-price-button border-input"), true);
+assert.equal(source.includes('searchParams.set("price"'), false);
+assert.equal(source.includes('searchParams.get("price"'), false);
+assert.equal(source.includes("let searchNudgeCounter = 0"), false);
+assert.equal(source.includes("cleanMarketplaceSearch"), true);
+assert.equal(source.includes("\"\\u200b\".repeat"), false);
+assert.equal(source.includes("function sanitizeMarketplaceChannelsRequest"), true);
+assert.equal(source.includes("function triggerMarketplaceSortRefresh"), true);
+assert.equal(source.includes("倍率从低到高"), true);
+assert.equal(source.includes("综合推荐"), true);
+assert.equal(source.includes("function resetPriceFilterState"), true);
+assert.equal(source.includes("height:36px"), true);
+assert.equal(source.includes("--hkb-price-bottom"), true);
+assert.equal(source.includes("getComputedStyle(trigger || anchor).marginBottom"), true);
 
 {
   const input = {
@@ -384,6 +401,7 @@ assert.equal(source.includes("function insertPriceFilter"), true);
 {
   assert.equal(helpers.requestBodyText("https://hub.linux.do/admin/graphql", { body: "MarketplaceModel" }), "MarketplaceModel");
   assert.equal(helpers.requestBodyText({ body: "marketplaceModel" }), "marketplaceModel");
+  assert.equal(helpers.requestUrl(new URL("https://hub.linux.do/admin/marketplace/channels?page=1")), "https://hub.linux.do/admin/marketplace/channels?page=1");
 }
 
 {
@@ -401,6 +419,16 @@ assert.equal(source.includes("function insertPriceFilter"), true);
   assert.equal(url.searchParams.get("first"), "20");
   assert.equal(url.searchParams.get("search"), "gpt-5.5");
   assert.equal(url.searchParams.get("sort"), "multiplier_asc");
+}
+
+{
+  const request = helpers.sanitizeMarketplaceChannelsRequest("https://hub.linux.do/admin/marketplace/channels?page=1&first=20&search=%E2%80%8B%E2%80%8B&tag=all&sort=multiplier_asc", {});
+  assert.equal(request.input.pathname, "/admin/marketplace/channels");
+  assert.equal(request.input.searchParams.get("page"), "1");
+  assert.equal(request.input.searchParams.get("first"), "20");
+  assert.equal(request.input.searchParams.get("tag"), "all");
+  assert.equal(request.input.searchParams.get("sort"), "multiplier_asc");
+  assert.equal(request.input.searchParams.has("search"), false);
 }
 
 {
