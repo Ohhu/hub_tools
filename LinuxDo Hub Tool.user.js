@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.2.0
-// @description  在 Hub 页面用弹窗把选中的渠道绑定到 API Key。
+// @version      0.2.1
+// @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
 // @icon         https://hub.linux.do/favicon
@@ -19,20 +19,24 @@
   const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
   const DIALOG_ID = `${PANEL_ID}-dialog`;
   const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
+  const CHANNEL_NAME_LOOKUP_LIMIT = 20;
   const nativeFetch = window.fetch.bind(window);
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
   const channelCache = new Map(), channelNameCache = new Map();
+  const channelNameRequestCache = new Map();
   const modelProviderPriceCache = new Map();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
   let selectedPriceFilter = "all";
   let lastMarketplaceChannelsFetchAt = 0;
   let editChannelIDs = [];
+  let editLoadToken = 0;
   let lastPathname = location.pathname;
 
   const queries = {
     createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
     getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}} key name type status scopes}cursor}pageInfo{hasNextPage hasPreviousPage startCursor endCursor}totalCount}}",
     getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
+    getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
     updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
     me: "query Me{me{id projects{projectID}}}",
   };
@@ -811,16 +815,20 @@
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
       .hkb-sort-anchor{position:relative}
       #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:calc(100% + 12px);bottom:var(--hkb-price-bottom,0px);display:flex;align-items:center;height:36px}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid hsl(20 5.9% 90%);border-radius:12px;background:transparent;color:hsl(20 14.3% 4.1%);padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 hsl(0 0% 0% / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:12px;background:color-mix(in oklab,var(--input,hsl(20 5.9% 90%)) 12%,transparent);color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:hsl(60 4.8% 95.9%)}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:hsl(20 14.3% 4.1%);box-shadow:0 0 0 3px hsl(20 14.3% 4.1% / .12)}
-      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:hsl(20 14.3% 4.1%);background:hsl(20 14.3% 4.1%);color:hsl(60 9.1% 97.8%)}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:var(--ring,var(--foreground,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--foreground,hsl(20 14.3% 4.1%))) 24%,transparent)}
+      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:var(--primary,hsl(20 14.3% 4.1%));background:var(--primary,hsl(20 14.3% 4.1%));color:var(--primary-foreground,hsl(60 9.1% 97.8%))}
+      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]{background:color-mix(in oklab,var(--input) 30%,transparent);box-shadow:0 1px 3px 0 rgb(0 0 0 / .3)}
+      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:color-mix(in oklab,var(--accent) 70%,transparent)}
+      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklab,var(--ring) 35%,transparent)}
+      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:var(--primary);background:var(--primary);color:var(--primary-foreground)}
       [data-hub-tool-price-hidden="true"]{display:none!important}
-      #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(17,24,39,.48);padding:16px;color:#111827;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
-      #${DIALOG_ID} .hkb-card{width:min(460px,100%);height:388px;box-sizing:border-box;background:#fff;border:1px solid rgba(229,231,235,.9);border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgba(15,23,42,.55),0 10px 24px -20px rgba(15,23,42,.35)}
+      #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgb(0 0 0 / .48);padding:16px;color:var(--foreground,#111827);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
+      #${DIALOG_ID} .hkb-card{width:min(460px,100%);height:388px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
-      #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:#9ca3af;font-size:15px;font-weight:650;padding:0 18px 11px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:#4b5563}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:#111827;border-bottom-color:#111827}
+      #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--muted-foreground,#9ca3af);font-size:15px;font-weight:650;padding:0 18px 11px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:var(--foreground,#4b5563)}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:var(--foreground,#111827);border-bottom-color:var(--primary,var(--foreground,#111827))}
       #${DIALOG_ID} [data-view-panel]{height:100%;display:grid;grid-template-rows:auto 1fr auto}
       #${DIALOG_ID} [data-view-panel][hidden]{display:none}
       #${DIALOG_ID} .hkb-grid{display:grid;gap:16px;min-height:0;align-content:start}
@@ -831,27 +839,34 @@
       #${DIALOG_ID} .hkb-edit-row-list .hkb-label{padding-top:10px}
       #${DIALOG_ID} [data-key-panel]{min-height:70px}
       #${DIALOG_ID} .hkb-field{display:grid;gap:6px}
-      #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:650;color:#374151}
-      #${DIALOG_ID} .hkb-control{width:100%;min-height:40px;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#111827;font:inherit;font-size:14px;line-height:20px;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
-      #${DIALOG_ID} .hkb-control:focus,#${DIALOG_ID} .hkb-control[aria-expanded="true"]{background:#fff;border-color:#9ca3af;box-shadow:0 0 0 3px rgba(17,24,39,.08)}
+      #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:650;color:var(--foreground,#374151)}
+      #${DIALOG_ID} .hkb-control{width:100%;min-height:40px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 18%,transparent);color:var(--foreground,#111827);font:inherit;font-size:14px;line-height:20px;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
+      #${DIALOG_ID} .hkb-control:focus,#${DIALOG_ID} .hkb-control[aria-expanded="true"]{background:var(--popover,var(--card,#fff));border-color:var(--ring,#9ca3af);box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#111827) 18%,transparent)}
       #${DIALOG_ID} .hkb-channel-tag{display:flex;align-items:center;min-height:40px}
       #${DIALOG_ID} input[type="text"]{height:40px}
-      #${DIALOG_ID} .hkb-copy-new{border-color:#d1d5db;background:#fff;color:#374151;white-space:nowrap}#${DIALOG_ID} .hkb-copy-new:hover{background:#f3f4f6}
-      #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:8px}#${DIALOG_ID} .hkb-key-picker{position:relative;flex:1;min-width:0}#${DIALOG_ID} .hkb-key-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer}#${DIALOG_ID} .hkb-key-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-trigger::after{content:"";width:8px;height:8px;border-right:1.5px solid #6b7280;border-bottom:1.5px solid #6b7280;transform:rotate(45deg) translateY(-2px);flex-shrink:0;transition:transform .15s}#${DIALOG_ID} .hkb-key-trigger[aria-expanded="true"]::after{transform:rotate(225deg) translateY(-1px)}
-      #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 18px 48px -24px rgba(15,23,42,.55),0 8px 20px -18px rgba(15,23,42,.45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
-      #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:#111827;text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:#f3f4f6}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:#111827;font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-      #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:#64748b;padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:#0f172a;background:#f1f5f9}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(15,23,42,.12)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
-      #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:#111827}
+      #${DIALOG_ID} .hkb-copy-new{border-color:var(--border,#d1d5db);background:var(--card,#fff);color:var(--foreground,#374151);white-space:nowrap}#${DIALOG_ID} .hkb-copy-new:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#374151))}
+      #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:8px}#${DIALOG_ID} .hkb-key-picker{position:relative;flex:1;min-width:0}#${DIALOG_ID} .hkb-key-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer}#${DIALOG_ID} .hkb-key-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-trigger::after{content:"";width:8px;height:8px;border-right:1.5px solid var(--muted-foreground,#6b7280);border-bottom:1.5px solid var(--muted-foreground,#6b7280);transform:rotate(45deg) translateY(-2px);flex-shrink:0;transition:transform .15s}#${DIALOG_ID} .hkb-key-trigger[aria-expanded="true"]::after{transform:rotate(225deg) translateY(-1px)}
+      #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:var(--popover,var(--card,#fff));border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 18px 48px -24px rgb(15 23 42 / .55),0 8px 20px -18px rgb(15 23 42 / .45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
+      #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:var(--popover-foreground,var(--foreground,#111827));text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
+      #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
-      #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;background:#f9fafb;padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:#cbd5e1 transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:#cbd5e1}
-      #${DIALOG_ID} .hkb-channel-row{min-height:34px;display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;color:#111827;font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:#fff}#${DIALOG_ID} .hkb-channel-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-remove{border:none;background:transparent;color:#6b7280;padding:0 6px;min-height:26px;font-size:12px}#${DIALOG_ID} .hkb-remove:hover{background:#f3f4f6;color:#111827}
-      #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:#9ca3af;font-size:13px}
-      #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid #f3f4f6}
+      #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 14%,transparent);padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:var(--border,#cbd5e1) transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:var(--border,#cbd5e1)}
+      #${DIALOG_ID} .hkb-channel-row{min-height:34px;display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-remove{border:none;background:transparent;color:var(--muted-foreground,#6b7280);padding:0 6px;min-height:26px;font-size:12px}#${DIALOG_ID} .hkb-remove:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}
+      #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:var(--muted-foreground,#9ca3af);font-size:13px}
+      #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid var(--border,#f3f4f6)}
       #${DIALOG_ID} .hkb-edit-actions{border-top:none;padding-top:18px}
       #${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{display:flex;align-items:center;gap:8px}
-      #${DIALOG_ID} .hkb-status{color:#6b7280;font-size:12px;line-height:16px;flex:1;min-width:0}
+      #${DIALOG_ID} .hkb-status{color:var(--muted-foreground,#6b7280);font-size:12px;line-height:16px;flex:1;min-width:0}
       #${DIALOG_ID} button:not(.hkb-icon-btn){box-sizing:border-box;height:36px;min-height:36px;line-height:20px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
-      #${DIALOG_ID} .hkb-primary{background:#111827;color:#f9fafb}#${DIALOG_ID} .hkb-primary:hover{background:#1f2937}#${DIALOG_ID} .hkb-secondary{border-color:#d1d5db;background:#f3f4f6;color:#374151}#${DIALOG_ID} .hkb-secondary:hover{background:#e5e7eb}#${DIALOG_ID} .hkb-ghost{border-color:transparent;background:transparent;color:#374151}#${DIALOG_ID} .hkb-ghost:hover{background:#f9fafb}`;
+      #${DIALOG_ID} .hkb-primary{border-color:var(--primary,#111827);background:var(--primary,#111827);color:var(--primary-foreground,#f9fafb)}#${DIALOG_ID} .hkb-primary:hover{background:color-mix(in oklab,var(--primary,#111827) 88%,white)}#${DIALOG_ID} .hkb-secondary{border-color:var(--border,#d1d5db);background:var(--secondary,#f3f4f6);color:var(--secondary-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-secondary:hover{background:var(--accent,#e5e7eb);color:var(--accent-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-ghost{border-color:transparent;background:transparent;color:var(--muted-foreground,#374151)}#${DIALOG_ID} .hkb-ghost:hover{background:var(--accent,#f9fafb);color:var(--accent-foreground,var(--foreground,#374151))}
+      html.dark #${DIALOG_ID}{background:rgb(0 0 0 / .56);color:var(--foreground)}
+      html.dark #${DIALOG_ID} .hkb-card{box-shadow:0 24px 64px -24px rgb(0 0 0 / .85),0 12px 28px -20px rgb(0 0 0 / .75)}
+      html.dark #${DIALOG_ID} .hkb-control{background:color-mix(in oklab,var(--input) 30%,transparent);border-color:var(--border);color:var(--foreground)}
+      html.dark #${DIALOG_ID} .hkb-control::placeholder{color:var(--muted-foreground)}
+      html.dark #${DIALOG_ID} .hkb-control:focus,html.dark #${DIALOG_ID} .hkb-control[aria-expanded="true"]{box-shadow:0 0 0 3px color-mix(in oklab,var(--ring) 35%,transparent)}
+      html.dark #${DIALOG_ID} .hkb-key-menu{box-shadow:0 18px 48px -24px rgb(0 0 0 / .85),0 8px 20px -18px rgb(0 0 0 / .8)}
+      html.dark #${DIALOG_ID} .hkb-edit-list{background:color-mix(in oklab,var(--input) 22%,transparent)}`;
     (document.head || document.documentElement).appendChild(style);
   }
 
@@ -997,6 +1012,40 @@
     const payload = await response.json();
     if (!response.ok || payload.errors?.length) throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
     return payload.data;
+  }
+
+  async function loadMissingChannelNames(channelIDs) {
+    const missingIDs = uniqueChannelIDs(channelIDs)
+      .filter((id) => !channelCache.has(String(id)))
+      .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
+    let loaded = 0;
+    for (const id of missingIDs) {
+      if (await loadChannelName(id).catch(() => null)) loaded += 1;
+    }
+    return loaded;
+  }
+
+  async function loadChannelName(channelID) {
+    const numericID = extractNumericChannelID(channelID);
+    if (!numericID) return null;
+    if (channelCache.has(String(numericID))) return channelCache.get(String(numericID));
+    if (channelNameRequestCache.has(numericID)) return channelNameRequestCache.get(numericID);
+    const request = graphql(
+      queries.getChannelName,
+      { id: `gid://axonhub/Channel/${numericID}` },
+      "GetChannelName",
+    ).then((data) => {
+      const channel = data?.node;
+      if (channel?.id && channel?.name) {
+        rememberChannel(channel);
+        return channelCache.get(String(numericID)) || channel;
+      }
+      return null;
+    }).finally(() => {
+      channelNameRequestCache.delete(numericID);
+    });
+    channelNameRequestCache.set(numericID, request);
+    return request;
   }
 
   async function loadMe() {
@@ -1154,6 +1203,10 @@
     if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
     editChannelIDs = currentProfileChannelIDs(data.node.profiles);
     renderEditChannelList();
+    const loadToken = ++editLoadToken;
+    loadMissingChannelNames(editChannelIDs).then((loaded) => {
+      if (loaded && loadToken === editLoadToken && currentViewPanel() === "edit") renderEditChannelList();
+    }).catch(() => {});
     setEditStatus("");
   }
 
@@ -1164,6 +1217,7 @@
 
   function showMainPanel() {
     editChannelIDs = [];
+    editLoadToken += 1;
     showViewPanel("main");
     setEditStatus("");
   }
@@ -1372,6 +1426,33 @@
   else startMountWatcher();
 
   if (window.__hubKeyBinderEnableTest) {
+    let graphqlRunner = null;
+    const testGraphql = (query, variables = {}, operationName = undefined) =>
+      (graphqlRunner ? graphqlRunner(query, variables, operationName) : graphql(query, variables, operationName));
+    const testLoadChannelName = async (channelID) => {
+      const numericID = extractNumericChannelID(channelID);
+      if (!numericID) return null;
+      if (channelCache.has(String(numericID))) return channelCache.get(String(numericID));
+      const data = await testGraphql(
+        queries.getChannelName,
+        { id: `gid://axonhub/Channel/${numericID}` },
+        "GetChannelName",
+      );
+      const channel = data?.node;
+      if (!channel?.id || !channel?.name) return null;
+      rememberChannel(channel);
+      return channelCache.get(String(numericID)) || channel;
+    };
+    const testLoadMissingChannelNames = async (channelIDs) => {
+      const missingIDs = uniqueChannelIDs(channelIDs)
+        .filter((id) => !channelCache.has(String(id)))
+        .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
+      let loaded = 0;
+      for (const id of missingIDs) {
+        if (await testLoadChannelName(id).catch(() => null)) loaded += 1;
+      }
+      return loaded;
+    };
     window.__hubKeyBinderTest = {
       extractNumericChannelID,
       findChannelFromButton,
@@ -1391,6 +1472,9 @@
       requestUrl,
       requestBodyText,
       rememberModelProviderPricesFromPayload,
+      channelLabel,
+      loadMissingChannelNames: testLoadMissingChannelNames,
+      __setGraphqlForTest: (runner) => { graphqlRunner = runner; },
     };
   }
 })();

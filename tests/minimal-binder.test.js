@@ -133,6 +133,7 @@ const helpers = loadHelpers();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const source = fs.readFileSync("LinuxDo Hub Tool.user.js", "utf8");
 
+async function main() {
 assert.equal(helpers.isCreateApiButtonText("创建 API 密钥"), true);
 assert.equal(helpers.isCreateApiButtonText("Create API Key"), true);
 assert.equal(helpers.isCreateApiButtonText("更新 API 密钥"), false);
@@ -146,6 +147,7 @@ assert.equal(source.includes('data-role="key-trigger"'), true);
 assert.equal(source.includes('data-role="key-menu"'), true);
 assert.equal(source.includes('data-action="select-key"'), true);
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
+assert.equal(source.includes("// @version      0.2.1"), true);
 assert.equal(source.includes("function isTargetRoute"), true);
 assert.equal(source.includes("function patchHistoryRouting"), true);
 assert.equal(source.includes('["pushState", "replaceState"]'), true);
@@ -190,6 +192,12 @@ assert.equal(source.includes("function resetPriceFilterState"), true);
 assert.equal(source.includes("height:36px"), true);
 assert.equal(source.includes("--hkb-price-bottom"), true);
 assert.equal(source.includes("getComputedStyle(trigger || anchor).marginBottom"), true);
+assert.equal(source.includes("html.dark #${PRICE_FIELD_ID}"), true);
+assert.equal(source.includes("background:var(--card,#fff)"), true);
+assert.equal(source.includes("border:1px solid var(--border"), true);
+assert.equal(source.includes("background:var(--primary,#111827)"), true);
+assert.equal(source.includes("color-mix(in oklab"), true);
+assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
 
 {
   const input = {
@@ -344,6 +352,34 @@ assert.equal(source.includes("getComputedStyle(trigger || anchor).marginBottom")
 }
 
 {
+  const requestedIDs = [];
+  helpers.__setGraphqlForTest(async (query, variables, operationName) => {
+    assert.equal(operationName, "GetChannelName");
+    requestedIDs.push(variables.id);
+    return { node: { id: variables.id, name: "按需渠道名" } };
+  });
+  assert.equal(helpers.channelLabel(987654), "Channel #987654");
+  const loaded = await helpers.loadMissingChannelNames([987654]);
+  assert.equal(loaded, 1);
+  assert.equal(helpers.channelLabel(987654), "按需渠道名");
+  assert.deepEqual(requestedIDs, ["gid://axonhub/Channel/987654"]);
+}
+
+{
+  const requestedIDs = [];
+  helpers.__setGraphqlForTest(async (query, variables) => {
+    requestedIDs.push(variables.id);
+    return { node: { id: variables.id, name: `渠道 ${variables.id}` } };
+  });
+  const ids = Array.from({ length: 25 }, (_, index) => 990000 + index);
+  const loaded = await helpers.loadMissingChannelNames([...ids, ids[0]]);
+  assert.equal(loaded, 20);
+  assert.equal(requestedIDs.length, 20);
+  assert.equal(requestedIDs[0], "gid://axonhub/Channel/990000");
+  assert.equal(requestedIDs[19], "gid://axonhub/Channel/990019");
+}
+
+{
   const payload = {
     items: [
       { name: "free", priceSummary: { allFree: true } },
@@ -451,3 +487,9 @@ assert.equal(source.includes("getComputedStyle(trigger || anchor).marginBottom")
 }
 
 console.log("minimal binder helpers ok");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
