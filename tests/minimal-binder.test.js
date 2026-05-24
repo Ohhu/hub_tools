@@ -147,7 +147,7 @@ assert.equal(source.includes('data-role="key-trigger"'), true);
 assert.equal(source.includes('data-role="key-menu"'), true);
 assert.equal(source.includes('data-action="select-key"'), true);
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.2.2"), true);
+assert.equal(source.includes("// @version      0.2.3"), true);
 assert.equal(source.includes("getKeyValue:"), true);
 assert.equal(source.includes("getKeys: \"query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}\""), true);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), false);
