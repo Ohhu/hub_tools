@@ -20,6 +20,7 @@
   const DIALOG_ID = `${PANEL_ID}-dialog`;
   const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
   const CHANNEL_NAME_LOOKUP_LIMIT = 20;
+  const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
   const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
   const HAS_ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/;
   const WHITESPACE_RE = /\s+/g;
@@ -602,13 +603,11 @@
   }
 
   function dispatchPointerEvent(element, type, buttons) {
-    const EventCtor = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
-    element.dispatchEvent(new EventCtor(type, {
-      ...mouseEventInit(element, buttons),
-      pointerId: 1,
-      pointerType: "mouse",
-      isPrimary: true,
-    }));
+    const init = mouseEventInit(element, buttons);
+    const event = typeof PointerEvent === "function"
+      ? new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true })
+      : new MouseEvent(type, init);
+    element.dispatchEvent(event);
   }
 
   function dispatchMouseEvent(element, type, buttons) {
@@ -787,7 +786,7 @@
 
   function findChannelInFiber(fiber) {
     let current = fiber;
-    for (let depth = 0; current && depth < 8; depth += 1, current = current.return) {
+    for (let depth = 0; current && depth < REACT_FIBER_CHANNEL_LOOKUP_LIMIT; depth += 1, current = current.return) {
       const channel = pickReactChannel(current.memoizedProps) || pickReactChannel(current.pendingProps);
       if (channel) return channel;
     }
@@ -839,7 +838,7 @@
       channels.push(...payload.data.channels.edges.map((edge) => edge?.node).filter(Boolean));
     }
     if (payload?.data?.node) channels.push(payload.data.node);
-    return channels;
+    return channels.filter(isChannelObject);
   }
 
   function rememberChannelList(channels) {
@@ -1108,11 +1107,8 @@
     const missingIDs = uniqueChannelIDs(channelIDs)
       .filter((id) => !channelCache.has(String(id)))
       .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
-    let loaded = 0;
-    for (const id of missingIDs) {
-      if (await loadChannelName(id).catch(() => null)) loaded += 1;
-    }
-    return loaded;
+    const results = await Promise.all(missingIDs.map((id) => loadChannelName(id).catch(() => null)));
+    return results.filter(Boolean).length;
   }
 
   async function loadChannelName(channelID) {
@@ -1536,11 +1532,8 @@
       const missingIDs = uniqueChannelIDs(channelIDs)
         .filter((id) => !channelCache.has(String(id)))
         .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
-      let loaded = 0;
-      for (const id of missingIDs) {
-        if (await testLoadChannelName(id).catch(() => null)) loaded += 1;
-      }
-      return loaded;
+      const results = await Promise.all(missingIDs.map((id) => testLoadChannelName(id).catch(() => null)));
+      return results.filter(Boolean).length;
     };
     window.__hubKeyBinderTest = {
       extractNumericChannelID,

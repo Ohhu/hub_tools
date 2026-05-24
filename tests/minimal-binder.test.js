@@ -411,6 +411,19 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
 }
 
 {
+  const remembered = helpers.rememberChannelsFromPayload({
+    data: {
+      node: { id: "gid://axonhub/APIKey/777003", name: "不是渠道" },
+      wrapper: {
+        channel: { id: "gid://axonhub/Channel/777003", name: "嵌套渠道", type: "openai" },
+      },
+    },
+  });
+  assert.equal(remembered, true);
+  assert.equal(helpers.channelLabel(777003), "嵌套渠道");
+}
+
+{
   const requestedIDs = [];
   helpers.__setGraphqlForTest(async (query, variables, operationName) => {
     assert.equal(operationName, "GetChannelName");
@@ -436,6 +449,21 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
   assert.equal(requestedIDs.length, 20);
   assert.equal(requestedIDs[0], "gid://axonhub/Channel/990000");
   assert.equal(requestedIDs[19], "gid://axonhub/Channel/990019");
+}
+
+{
+  let active = 0;
+  let peakActive = 0;
+  helpers.__setGraphqlForTest(async (query, variables) => {
+    active += 1;
+    peakActive = Math.max(peakActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    active -= 1;
+    return { node: { id: variables.id, name: `并发 ${variables.id}` } };
+  });
+  const loaded = await helpers.loadMissingChannelNames([991100, 991101, 991102]);
+  assert.equal(loaded, 3);
+  assert.equal(peakActive > 1, true);
 }
 
 {
