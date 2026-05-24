@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.2.1
+// @version      0.2.2
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -20,6 +20,15 @@
   const DIALOG_ID = `${PANEL_ID}-dialog`;
   const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
   const CHANNEL_NAME_LOOKUP_LIMIT = 20;
+  const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
+  const HAS_ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/;
+  const WHITESPACE_RE = /\s+/g;
+  const CREATE_API_KEY_RE = /创建\s*API\s*密钥|Create\s*API\s*Key/i;
+  const HAS_FLAT_FEE_RE = /flatFee\b/;
+  const HAS_MODE_RE = /\bmode\b/;
+  const PRICING_USAGE_RE = /(pricing\s*\{)([\s\S]*?usagePerUnit\b)/;
+  const HTML_ESCAPE_RE = /[&<>"']/g;
+  const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
   const nativeFetch = window.fetch.bind(window);
   const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
   const channelCache = new Map(), channelNameCache = new Map();
@@ -34,8 +43,9 @@
 
   const queries = {
     createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
-    getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}} key name type status scopes}cursor}pageInfo{hasNextPage hasPreviousPage startCursor endCursor}totalCount}}",
+    getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
     getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
+    getKeyValue: "query GetApiKeyValue($id:ID!){node(id:$id){... on APIKey{id key}}}",
     getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
     updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
     me: "query Me{me{id projects{projectID}}}",
@@ -78,9 +88,9 @@
     const type = response?.headers?.get?.("content-type") || "";
     if (!type.includes("application/json")) return;
     response.clone().json().then((payload) => {
-      rememberChannelsFromPayload(payload);
+      const changed = rememberChannelsFromPayload(payload);
       rememberModelProviderPricesFromPayload(payload);
-      schedulePanel();
+      if (changed) schedulePanel();
     }).catch(() => {});
   }
 
@@ -141,8 +151,8 @@
   }
 
   function withMarketplaceModelPricingFields(input, init) {
-    if (!isMarketplaceModelRequestBody(requestBodyText(input, init))) return { input, init };
     const bodyText = requestBodyText(input, init);
+    if (!isMarketplaceModelRequestBody(bodyText)) return { input, init };
     let body;
     try {
       body = JSON.parse(bodyText);
@@ -159,16 +169,16 @@
   }
 
   function isMarketplaceModelRequestBody(bodyText) {
-    return String(bodyText || "").includes("MarketplaceModel")
-      || String(bodyText || "").includes("marketplaceModel");
+    const text = String(bodyText || "");
+    return text.includes("MarketplaceModel") || text.includes("marketplaceModel");
   }
 
   function ensurePricingFields(query) {
-    if (!query || (/flatFee\b/.test(query) && /\bmode\b/.test(query))) return query;
-    return String(query).replace(/(pricing\s*\{)([\s\S]*?usagePerUnit\b)/, (match, open, rest) => {
+    if (!query || (HAS_FLAT_FEE_RE.test(query) && HAS_MODE_RE.test(query))) return query;
+    return String(query).replace(PRICING_USAGE_RE, (match, open, rest) => {
       const additions = [
-        /\bmode\b/.test(match) ? "" : "\n          mode",
-        /\bflatFee\b/.test(match) ? "" : "\n          flatFee",
+        HAS_MODE_RE.test(match) ? "" : "\n          mode",
+        HAS_FLAT_FEE_RE.test(match) ? "" : "\n          flatFee",
       ].join("");
       return `${open}${additions}${rest}`;
     });
@@ -184,7 +194,12 @@
 
   function currentMarketplaceModelID() {
     const match = location.pathname.match(/^\/marketplace\/models\/([^/?#]+)/);
-    return match ? decodeURIComponent(match[1]) : "";
+    if (!match) return "";
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
   }
 
   function marketplaceModelIDFromPayload(payload) {
@@ -336,15 +351,15 @@
   }
 
   function cleanMarketplaceSearch(value) {
-    return String(value || "").replace(/[\u200b-\u200d\ufeff]/g, "").trim();
+    return String(value || "").replace(ZERO_WIDTH_RE, "").trim();
   }
 
   function hasMarketplaceSearchMarker(value) {
-    return /[\u200b-\u200d\ufeff]/.test(String(value || ""));
+    return HAS_ZERO_WIDTH_RE.test(String(value || ""));
   }
 
   function cleanText(value) {
-    return String(value || "").replace(/\s+/g, " ").trim();
+    return String(value || "").replace(WHITESPACE_RE, " ").trim();
   }
 
   function shouldStopMarketplacePriceScan(items, mode) {
@@ -426,7 +441,7 @@
   }
 
   function isCreateApiButtonText(text) {
-    return /创建\s*API\s*密钥|Create\s*API\s*Key/i.test(String(text || ""));
+    return CREATE_API_KEY_RE.test(String(text || ""));
   }
 
   function isTriggerButton(node) {
@@ -533,10 +548,6 @@
     setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
   }
 
-  function handlePriceFilterChange(event) {
-    setPriceFilter(event.target?.value);
-  }
-
   function setPriceFilter(value) {
     const price = normalizePriceFilter(value);
     if (price === selectedPriceFilter) return;
@@ -567,15 +578,56 @@
     const trigger = findMarketplaceSortTrigger();
     if (!trigger) return false;
     const fetchStartedAt = lastMarketplaceChannelsFetchAt;
-    trigger.click();
+    openSelectLikeUser(trigger);
     setTimeout(() => {
       const option = findVisibleOptionByText(targetText);
-      if (option) option.click();
+      if (option) selectOptionLikeUser(option);
     }, 0);
     setTimeout(() => {
       if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
     }, 260);
     return true;
+  }
+
+  function openSelectLikeUser(trigger) {
+    dispatchPointerEvent(trigger, "pointerdown", 1);
+  }
+
+  function selectOptionLikeUser(option) {
+    dispatchPointerEvent(option, "pointermove", 1);
+    dispatchMouseEvent(option, "mousemove", 1);
+    dispatchPointerEvent(option, "pointerup", 0);
+    dispatchMouseEvent(option, "mouseup", 0);
+    dispatchMouseEvent(option, "click", 0);
+  }
+
+  function dispatchPointerEvent(element, type, buttons) {
+    const EventCtor = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    element.dispatchEvent(new EventCtor(type, {
+      ...mouseEventInit(element, buttons),
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+    }));
+  }
+
+  function dispatchMouseEvent(element, type, buttons) {
+    element.dispatchEvent(new MouseEvent(type, mouseEventInit(element, buttons)));
+  }
+
+  function mouseEventInit(element, buttons) {
+    const rect = element.getBoundingClientRect?.();
+    const clientX = rect ? rect.left + rect.width / 2 : 0;
+    const clientY = rect ? rect.top + rect.height / 2 : 0;
+    return {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      button: 0,
+      buttons,
+      clientX,
+      clientY,
+    };
   }
 
   function resetPriceFilterState() {
@@ -722,21 +774,31 @@
 
   function findDirectReactChannel(node) {
     for (const key of Object.keys(node || {})) {
-      if (!key.startsWith("__reactProps$") && !key.startsWith("__reactFiber$")) continue;
-      const channel = findChannelInObject(node[key]);
+      if (key.startsWith("__reactProps$")) {
+        const channel = pickReactChannel(node[key]);
+        if (channel) return channel;
+      } else if (key.startsWith("__reactFiber$")) {
+        const channel = findChannelInFiber(node[key]);
+        if (channel) return channel;
+      }
+    }
+    return null;
+  }
+
+  function findChannelInFiber(fiber) {
+    let current = fiber;
+    for (let depth = 0; current && depth < 8; depth += 1, current = current.return) {
+      const channel = pickReactChannel(current.memoizedProps) || pickReactChannel(current.pendingProps);
       if (channel) return channel;
     }
     return null;
   }
 
-  function findChannelInObject(value, seen = new Set()) {
-    if (!value || typeof value !== "object" || seen.has(value)) return null;
-    if (Array.isArray(value)) return null;
-    seen.add(value);
-    if (isChannelObject(value)) return value;
-    for (const child of Object.values(value)) {
-      const found = findChannelInObject(child, seen);
-      if (found) return found;
+  function pickReactChannel(props) {
+    if (!props || typeof props !== "object" || Array.isArray(props)) return null;
+    if (isChannelObject(props)) return props;
+    for (const key of ["channel", "node", "data", "item", "row"]) {
+      if (isChannelObject(props[key])) return props[key];
     }
     return null;
   }
@@ -752,15 +814,40 @@
       || "type" in value;
   }
 
-  function rememberChannelsFromPayload(payload, seen = new Set()) {
-    if (!payload || typeof payload !== "object" || seen.has(payload)) return;
+  function rememberChannelsFromPayload(payload, seen = new Set(), depth = 0) {
+    if (!payload || typeof payload !== "object" || seen.has(payload)) return false;
+    const directChannels = knownPayloadChannels(payload);
+    if (directChannels.length) return rememberChannelList(directChannels);
+    if (depth >= 4) return false;
     if (Array.isArray(payload)) {
-      for (const item of payload) rememberChannelsFromPayload(item, seen);
-      return;
+      return rememberChannelList(payload) || payload.some((item) => rememberChannelsFromPayload(item, seen, depth + 1));
     }
     seen.add(payload);
-    if (isChannelObject(payload)) rememberChannel(payload);
-    for (const child of Object.values(payload)) rememberChannelsFromPayload(child, seen);
+    let changed = false;
+    if (isChannelObject(payload)) changed = rememberChannel(payload) || changed;
+    for (const child of Object.values(payload)) changed = rememberChannelsFromPayload(child, seen, depth + 1) || changed;
+    return changed;
+  }
+
+  function knownPayloadChannels(payload) {
+    const channels = [];
+    if (Array.isArray(payload?.items)) channels.push(...payload.items);
+    if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
+      channels.push(...payload.data.marketplaceModel.providers.map((provider) => provider?.channel).filter(Boolean));
+    }
+    if (Array.isArray(payload?.data?.channels?.edges)) {
+      channels.push(...payload.data.channels.edges.map((edge) => edge?.node).filter(Boolean));
+    }
+    if (payload?.data?.node) channels.push(payload.data.node);
+    return channels;
+  }
+
+  function rememberChannelList(channels) {
+    let changed = false;
+    for (const channel of channels || []) {
+      if (isChannelObject(channel)) changed = rememberChannel(channel) || changed;
+    }
+    return changed;
   }
 
   function rememberModelProviderPricesFromPayload(payload) {
@@ -797,12 +884,15 @@
   }
 
   function rememberChannel(channel) {
-    if (!channel?.id || !channel?.name) return;
+    if (!channel?.id || !channel?.name) return false;
     const item = { id: String(channel.id), name: String(channel.name) };
+    const existing = channelCache.get(item.id);
+    if (existing?.name === item.name) return false;
     channelCache.set(item.id, item);
     const numericID = extractNumericChannelID(item.id);
     if (numericID) channelCache.set(String(numericID), item);
     channelNameCache.set(normalizeChannelName(item.name), item);
+    return true;
   }
 
   function normalizeChannelName(name) {
@@ -1246,6 +1336,10 @@
 
   function removeEditChannel(channelID) {
     const numericID = extractNumericChannelID(channelID);
+    if (!numericID) {
+      setEditStatus("渠道 ID 无效");
+      return;
+    }
     editChannelIDs = editChannelIDs.filter((id) => id !== numericID);
     renderEditChannelList();
     setEditStatus("已移除，保存后生效");
@@ -1309,9 +1403,10 @@
   async function copySelectedKey() {
     const keyID = selectedKeyID;
     if (!keyID) throw new Error("请先选择 API Key");
-    const key = keysCache.find((k) => k.id === keyID);
-    if (!key?.key) throw new Error("该 Key 无可复制的密钥值");
-    await navigator.clipboard.writeText(key.key);
+    const data = await graphql(queries.getKeyValue, { id: keyID }, "GetApiKeyValue");
+    const value = data?.node?.key;
+    if (!value) throw new Error("该 Key 无可复制的密钥值");
+    await navigator.clipboard.writeText(value);
     setStatus("已复制密钥");
   }
 
@@ -1375,13 +1470,7 @@
   }
 
   function escapeHtml(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      "\"": "&quot;",
-      "'": "&#39;",
-    })[char]);
+    return String(value ?? "").replace(HTML_ESCAPE_RE, (char) => HTML_ESCAPE_MAP[char]);
   }
 
   function startMountWatcher() {

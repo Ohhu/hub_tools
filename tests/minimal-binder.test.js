@@ -147,7 +147,10 @@ assert.equal(source.includes('data-role="key-trigger"'), true);
 assert.equal(source.includes('data-role="key-menu"'), true);
 assert.equal(source.includes('data-action="select-key"'), true);
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.2.1"), true);
+assert.equal(source.includes("// @version      0.2.2"), true);
+assert.equal(source.includes("getKeyValue:"), true);
+assert.equal(source.includes("getKeys: \"query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}\""), true);
+assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), false);
 assert.equal(source.includes("function isTargetRoute"), true);
 assert.equal(source.includes("function patchHistoryRouting"), true);
 assert.equal(source.includes('["pushState", "replaceState"]'), true);
@@ -170,8 +173,7 @@ assert.equal(source.includes('data-role="edit-key-label"'), true);
 assert.equal(source.includes("hkb-edit-list{height:100%;min-height:92px"), true);
 assert.equal(source.includes('>⧉</button>'), false);
 assert.equal(source.includes('>↻</button>'), false);
-assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), true);
-assert.equal(source.includes("node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername"), true);
+assert.equal(source.includes("node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername"), false);
 assert.equal(source.includes("async function loadSelectedKeyValue"), false);
 assert.equal(source.includes("price-filter"), true);
 assert.equal(source.includes("function insertPriceFilter"), true);
@@ -186,6 +188,11 @@ assert.equal(source.includes("cleanMarketplaceSearch"), true);
 assert.equal(source.includes("\"\\u200b\".repeat"), false);
 assert.equal(source.includes("function sanitizeMarketplaceChannelsRequest"), true);
 assert.equal(source.includes("function triggerMarketplaceSortRefresh"), true);
+assert.equal(source.includes("function openSelectLikeUser"), true);
+assert.equal(source.includes("function selectOptionLikeUser"), true);
+assert.equal(source.includes("pointerType: \"mouse\""), true);
+assert.equal(source.includes("trigger.click();"), false);
+assert.equal(source.includes("option.click();"), false);
 assert.equal(source.includes("倍率从低到高"), true);
 assert.equal(source.includes("综合推荐"), true);
 assert.equal(source.includes("function resetPriceFilterState"), true);
@@ -349,6 +356,58 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
     id: "2875",
     name: "React 卡片渠道",
   });
+}
+
+{
+  const card = new FakeElement({ attrs: { "data-slot": "card" } });
+  new FakeElement({ text: "不应误匹配渠道", attrs: { "data-slot": "card-title" }, parent: card });
+  const button = new FakeElement({
+    text: "创建 API 密钥",
+    parent: card,
+    props: {
+      __reactFiber$test: {
+        memoizedProps: {
+          unrelated: {
+            deeply: {
+              nested: { id: 991122, name: "错误深层渠道", type: "openai" },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(plain(helpers.findChannelFromButton(button)), {
+    id: "",
+    name: "不应误匹配渠道",
+  });
+}
+
+{
+  const remembered = helpers.rememberChannelsFromPayload({
+    data: {
+      channels: {
+        edges: [
+          { node: { id: "gid://axonhub/Channel/777001", name: "列表响应渠道", type: "openai" } },
+        ],
+      },
+    },
+  });
+  assert.equal(remembered, true);
+  assert.equal(helpers.channelLabel(777001), "列表响应渠道");
+}
+
+{
+  const remembered = helpers.rememberChannelsFromPayload({
+    data: {
+      marketplaceModel: {
+        providers: [
+          { channel: { id: "gid://axonhub/Channel/777002", name: "模型响应渠道", type: "openai" } },
+        ],
+      },
+    },
+  });
+  assert.equal(remembered, true);
+  assert.equal(helpers.channelLabel(777002), "模型响应渠道");
 }
 
 {
