@@ -487,9 +487,9 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
     totalCount: 3,
     totalPages: 1,
   };
-  assert.deepEqual(plain(helpers.filterMarketplacePayloadByPrice(payload, "all")).items.map((item) => item.name), ["free", "paid", "unknown"]);
-  assert.deepEqual(plain(helpers.filterMarketplacePayloadByPrice(payload, "free")).items.map((item) => item.name), ["free"]);
-  assert.deepEqual(plain(helpers.filterMarketplacePayloadByPrice(payload, "paid")).items.map((item) => item.name), ["paid"]);
+  assert.deepEqual(plain(await helpers.filterMarketplacePayloadByPrice(payload, "all")).items.map((item) => item.name), ["free", "paid", "unknown"]);
+  assert.deepEqual(plain(await helpers.filterMarketplacePayloadByPrice(payload, "free")).items.map((item) => item.name), ["free"]);
+  assert.deepEqual(plain(await helpers.filterMarketplacePayloadByPrice(payload, "paid")).items.map((item) => item.name), ["paid"]);
 }
 
 {
@@ -517,13 +517,56 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
     },
   };
   assert.deepEqual(
-    plain(helpers.filterMarketplacePayloadByPrice(payload, "free")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    plain(await helpers.filterMarketplacePayloadByPrice(payload, "free")).data.marketplaceModel.providers.map((item) => item.channel.name),
     ["no-current-price", "current-free", "free-with-multiplier"],
   );
   assert.deepEqual(
-    plain(helpers.filterMarketplacePayloadByPrice(payload, "paid")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    plain(await helpers.filterMarketplacePayloadByPrice(payload, "paid")).data.marketplaceModel.providers.map((item) => item.channel.name),
     ["current-paid-by-prefix", "paid-by-flat-fee", "other-model-paid-current-free"],
   );
+}
+
+{
+  helpers.__location.pathname = "/marketplace/models/gpt-5.4";
+  helpers.__setPriceFilterForTest("free");
+  const payload = {
+    data: {
+      marketplaceModel: {
+        modelID: "gpt-5.4",
+        providers: [
+          {
+            channel: {
+              id: "gid://axonhub/Channel/12345",
+              name: "implicit-current-free",
+              channelModelPrices: [
+                { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  };
+  assert.deepEqual(
+    plain(await helpers.filterMarketplacePayloadByPrice(payload, "free")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    ["implicit-current-free"],
+  );
+  const augmented = helpers.augmentChannelModelPricesPayload(null, null, {
+    data: {
+      node: {
+        id: "gid://axonhub/Channel/12345",
+        channelModelPrices: [
+          { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } },
+        ],
+      },
+    },
+  });
+  const rows = augmented.data.node.channelModelPrices;
+  assert.equal(rows[0].id, "implicit-free:12345:gpt-5.4");
+  assert.equal(rows[0].modelID, "gpt-5.4");
+  assert.equal(rows[0].price.items.every((item) => item.pricing.usagePerUnit === 0), true);
+  helpers.__setPriceFilterForTest("all");
+  helpers.__location.pathname = "/marketplace";
 }
 
 {

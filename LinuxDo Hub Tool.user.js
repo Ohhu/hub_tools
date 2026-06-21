@@ -38,6 +38,7 @@
   const channelNameRequestCache = new Map();
   const modelProviderPriceCache = new Map();
   const channelModelPricesCache = new Map();
+  const modelPageImplicitFreeCache = new Map();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
   let selectedPriceFilter = "all";
   let lastMarketplaceChannelsFetchAt = 0;
@@ -277,8 +278,12 @@
   }
 
   function priceMatchesProviderForModel(provider, mode) {
-    const freeState = channelFreeStateForModel(provider?.channel, provider?.modelID || currentMarketplaceModelID());
-    return mode === "free" ? freeState === true : freeState === false;
+    const modelID = provider?.modelID || currentMarketplaceModelID();
+    const detail = channelFreeStateForModelDetail(provider?.channel, modelID);
+    if (mode === "free" && detail.free === true && detail.reason === "implicit_missing_row" && provider?.channel?.id) {
+      rememberModelPageImplicitFree(provider.channel.id, modelID);
+    }
+    return mode === "free" ? detail.free === true : detail.free === false;
   }
 
   function marketplaceChannelFreeState(channel) {
@@ -287,13 +292,20 @@
   }
 
   function channelFreeStateForModel(channel, modelID = "") {
-    if (!Array.isArray(channel?.channelModelPrices)) return true;
+    return channelFreeStateForModelDetail(channel, modelID).free;
+  }
+
+  function channelFreeStateForModelDetail(channel, modelID = "") {
+    if (!Array.isArray(channel?.channelModelPrices)) return { free: true, reason: "missing_prices" };
     const prices = channel.channelModelPrices;
-    if (prices.length === 0) return true;
+    if (prices.length === 0) return { free: true, reason: "empty_prices" };
     const normalizedModelID = normalizeModelID(modelID);
-    if (!normalizedModelID) return prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items));
-    const modelPrice = prices.find((price) => normalizeModelID(price?.modelID) === normalizedModelID);
-    return modelPrice ? modelPriceItemsFree(modelPrice?.price?.items) : true;
+    if (!normalizedModelID) {
+      return { free: prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items)), reason: "all_models" };
+    }
+    const modelPrice = findModelPriceRow(prices, modelID);
+    if (!modelPrice) return { free: true, reason: "implicit_missing_row" };
+    return { free: modelPriceItemsFree(modelPrice?.price?.items), reason: "explicit_row" };
   }
 
   function modelPriceItemsFree(items) {
@@ -405,6 +417,24 @@
     return (prices || []).find((price) => normalizeModelID(price?.modelID) === normalizedModelID) || null;
   }
 
+  function modelPageImplicitFreeKey(channelID, modelID) {
+    const channelKey = channelCacheKey(channelID), modelKey = normalizeModelID(modelID);
+    return channelKey && modelKey ? `${channelKey}:${modelKey}` : "";
+  }
+
+  function rememberModelPageImplicitFree(channelID, modelID) {
+    const key = modelPageImplicitFreeKey(channelID, modelID);
+    if (!key) return;
+    modelPageImplicitFreeCache.set(key, { channelID, modelID, pathname: location.pathname });
+  }
+
+  function hasModelPageImplicitFree(channelID, modelID) {
+    const key = modelPageImplicitFreeKey(channelID, modelID);
+    if (!key) return false;
+    const record = modelPageImplicitFreeCache.get(key);
+    return Boolean(record && record.pathname === location.pathname);
+  }
+
   async function loadChannelModelPrices(channelID, input, init) {
     const cacheKey = channelCacheKey(channelID);
     if (!cacheKey) return [];
@@ -474,7 +504,7 @@
     const prices = channel?.channelModelPrices;
     if (!channel?.id || !Array.isArray(prices)) return payload;
     cacheChannelModelPrices(channel.id, prices);
-    const implicitRows = implicitFreePriceRowsForCurrentSearch(channel.id, prices);
+    const implicitRows = implicitFreePriceRowsForCurrentContext(channel.id, prices);
     if (!implicitRows.length) return payload;
     return {
       ...payload,
@@ -486,6 +516,13 @@
         },
       },
     };
+  }
+
+  function implicitFreePriceRowsForCurrentContext(channelID, prices) {
+    return [
+      ...implicitFreePriceRowsForCurrentSearch(channelID, prices),
+      ...implicitFreePriceRowsForCurrentModelPage(channelID, prices),
+    ];
   }
 
   function implicitFreePriceRowsForCurrentSearch(channelID, prices) {
@@ -500,6 +537,15 @@
       .filter((modelID) => !existing.has(normalizeModelID(modelID)))
       .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
       .map((modelID) => createImplicitFreePriceRow(channelID, modelID));
+  }
+
+  function implicitFreePriceRowsForCurrentModelPage(channelID, prices) {
+    if (!location.pathname.startsWith("/marketplace/models/")) return [];
+    if (currentPriceFilter() !== "free") return [];
+    const modelID = currentMarketplaceModelID();
+    if (!modelID || !hasModelPageImplicitFree(channelID, modelID)) return [];
+    const existing = new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+    return existing.has(normalizeModelID(modelID)) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
   }
 
   function createImplicitFreePriceRow(channelID, modelID) {
@@ -1088,7 +1134,12 @@
     for (const provider of providers) {
       const channel = provider?.channel;
       if (!channel?.id) continue;
-      const state = channelFreeStateForModel(channel, provider?.modelID || modelID);
+      const providerModelID = provider?.modelID || modelID;
+      const detail = channelFreeStateForModelDetail(channel, providerModelID);
+      if (detail.free === true && detail.reason === "implicit_missing_row") {
+        rememberModelPageImplicitFree(channel.id, providerModelID);
+      }
+      const state = detail.free;
       for (const key of modelProviderCacheKeys(channel.id, modelID)) modelProviderPriceCache.set(key, state);
     }
   }
@@ -1825,6 +1876,9 @@
       findMarketplaceFilterFields,
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
+      augmentChannelModelPricesPayload,
+      channelFreeStateForModelDetail,
+      implicitFreePriceRowsForCurrentModelPage,
       ensurePricingFields,
       marketplaceChannelsScanUrl,
       sanitizeMarketplaceChannelsRequest,
@@ -1835,6 +1889,7 @@
       rememberModelProviderPricesFromPayload,
       channelLabel,
       loadMissingChannelNames: testLoadMissingChannelNames,
+      __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
       __setGraphqlForTest: (runner) => { graphqlRunner = runner; },
     };
   }
