@@ -100,8 +100,11 @@ function loadHelpers() {
   const documentState = { main: null, selectedTab: null };
   const context = {
     Headers,
+    Request,
     MutationObserver: class { observe() {} },
+    ReadableStream,
     URL,
+    URLSearchParams,
     document: {
       readyState: "loading",
       documentElement,
@@ -131,7 +134,10 @@ function loadHelpers() {
   context.window.setTimeout = setTimeout;
   context.window.MutationObserver = context.MutationObserver;
   context.window.Headers = Headers;
+  context.window.Request = Request;
+  context.window.ReadableStream = ReadableStream;
   context.window.URL = URL;
+  context.window.URLSearchParams = URLSearchParams;
   vm.runInNewContext(source, context.window);
   context.window.__hubKeyBinderTest.__documentState = documentState;
   context.window.__hubKeyBinderTest.__location = context.location;
@@ -148,6 +154,8 @@ assert.equal(helpers.isCreateApiButtonText("Create API Key"), true);
 assert.equal(helpers.isCreateApiButtonText("更新 API 密钥"), false);
 assert.equal(source.includes('data-role="created-key-wrap"'), false);
 assert.equal(source.includes('data-role="created-key"'), false);
+assert.equal(source.includes("dataset.createdKeyValue"), false);
+assert.equal(source.includes("createdKeyValueCache"), true);
 assert.equal(source.includes("data-panel="), false);
 assert.equal(source.includes("data-key-panel="), true);
 assert.equal(source.includes("data-action-panel="), true);
@@ -582,11 +590,37 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
 }
 
 {
+  const body = JSON.stringify({ operationName: "MarketplaceModel", query: "query MarketplaceModel { marketplaceModel { modelID } }" });
+  const request = new Request("https://hub.linux.do/admin/graphql", { method: "POST", body });
+  assert.equal(helpers.requestBodyText(request), "");
+  assert.equal(await helpers.readRequestBodyText(request), body);
+  assert.equal(helpers.requestBodyText(request), body);
+}
+
+{
   const query = "query MarketplaceModel { marketplaceModel { providers { channel { channelModelPrices { price { items { pricing { usagePerUnit } } } } } } } }";
   const nextQuery = helpers.ensurePricingFields(query);
   assert.equal(nextQuery.includes("mode"), true);
   assert.equal(nextQuery.includes("flatFee"), true);
   assert.equal(helpers.ensurePricingFields(nextQuery), nextQuery);
+}
+
+{
+  const query = "query MarketplaceModel { displayModel { mode flatFee } marketplaceModel { providers { channel { channelModelPrices { price { items { pricing { usagePerUnit } otherPricing: pricing { usagePerUnit mode flatFee } } } } } } } } }";
+  const nextQuery = helpers.ensurePricingFields(query);
+  assert.equal(nextQuery.includes("displayModel { mode flatFee }"), true);
+  assert.equal((nextQuery.match(/pricing \{\s+mode\s+flatFee\s+usagePerUnit/g) || []).length >= 1, true);
+  assert.equal(helpers.ensurePricingFields(nextQuery), nextQuery);
+}
+
+{
+  const query = "query MarketplaceModel { marketplaceModel { providers { channel { channelModelPrices { price { items { pricing { usagePerUnit } } } } } } } }";
+  const body = JSON.stringify({ operationName: "MarketplaceModel", query });
+  const request = new Request("https://hub.linux.do/admin/graphql", { method: "POST", body });
+  const nextRequest = await helpers.withMarketplaceModelPricingFields(request);
+  const nextBody = JSON.parse(nextRequest.init.body);
+  assert.equal(nextBody.query.includes("flatFee"), true);
+  assert.equal(nextBody.query.includes("mode"), true);
 }
 
 {

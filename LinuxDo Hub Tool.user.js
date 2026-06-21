@@ -24,12 +24,10 @@
   const IMPLICIT_FREE_PRICE_LIMIT = 50;
   const IMPLICIT_FREE_PRICE_ROW_PREFIX = "implicit-free";
   const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
-  const HAS_ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/;
   const WHITESPACE_RE = /\s+/g;
   const CREATE_API_KEY_RE = /创建\s*API\s*密钥|Create\s*API\s*Key/i;
   const HAS_FLAT_FEE_RE = /flatFee\b/;
   const HAS_MODE_RE = /\bmode\b/;
-  const PRICING_USAGE_RE = /(pricing\s*\{)([\s\S]*?usagePerUnit\b)/;
   const HTML_ESCAPE_RE = /[&<>"']/g;
   const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
   const nativeFetch = window.fetch.bind(window);
@@ -39,8 +37,10 @@
   const modelProviderPriceCache = new Map();
   const channelModelPricesCache = new Map();
   const modelPageImplicitFreeCache = new Map();
+  const requestBodyTextCache = new WeakMap();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
   let selectedPriceFilter = "all";
+  let createdKeyValueCache = "";
   let lastMarketplaceChannelsFetchAt = 0;
   let editChannelIDs = [];
   let editLoadToken = 0;
@@ -59,7 +59,8 @@
 
   window.fetch = async function patchedFetch(input, init) {
     const sanitizedRequest = sanitizeMarketplaceChannelsRequest(input, init);
-    const nextRequest = withMarketplaceModelPricingFields(sanitizedRequest.input, sanitizedRequest.init);
+    await rememberRequestBodyText(sanitizedRequest.input, sanitizedRequest.init);
+    const nextRequest = await withMarketplaceModelPricingFields(sanitizedRequest.input, sanitizedRequest.init);
     if (isMarketplaceChannelsUrl(requestUrl(nextRequest.input))) lastMarketplaceChannelsFetchAt = Date.now();
     rememberRequestHeaders(nextRequest.input, nextRequest.init);
     const response = await nativeFetch(nextRequest.input, nextRequest.init);
@@ -183,12 +184,42 @@
     return String(typeof input === "string" ? input : input?.url || "");
   }
 
-  function requestBodyText(input, init) {
-    return String(init?.body ?? input?.body ?? "");
+  async function rememberRequestBodyText(input, init) {
+    await readRequestBodyText(input, init);
   }
 
-  function withMarketplaceModelPricingFields(input, init) {
-    const bodyText = requestBodyText(input, init);
+  async function readRequestBodyText(input, init) {
+    if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
+    if (typeof Request !== "undefined" && input instanceof Request) {
+      if (requestBodyTextCache.has(input)) return requestBodyTextCache.get(input);
+      try {
+        const text = await input.clone().text();
+        requestBodyTextCache.set(input, text);
+        return text;
+      } catch {
+        requestBodyTextCache.set(input, "");
+        return "";
+      }
+    }
+    return requestBodyText(input, init);
+  }
+
+  function requestBodyText(input, init) {
+    if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
+    if (typeof Request !== "undefined" && input instanceof Request) return requestBodyTextCache.get(input) || "";
+    return bodyValueText(input?.body ?? "");
+  }
+
+  function bodyValueText(value) {
+    if (typeof value === "string") return value;
+    if (value == null) return "";
+    if (typeof URLSearchParams !== "undefined" && value instanceof URLSearchParams) return value.toString();
+    if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return "";
+    return String(value);
+  }
+
+  async function withMarketplaceModelPricingFields(input, init) {
+    const bodyText = await readRequestBodyText(input, init);
     if (!isMarketplaceModelRequestBody(bodyText)) return { input, init };
     let body;
     try {
@@ -211,14 +242,45 @@
   }
 
   function ensurePricingFields(query) {
-    if (!query || (HAS_FLAT_FEE_RE.test(query) && HAS_MODE_RE.test(query))) return query;
-    return String(query).replace(PRICING_USAGE_RE, (match, open, rest) => {
-      const additions = [
-        HAS_MODE_RE.test(match) ? "" : "\n          mode",
-        HAS_FLAT_FEE_RE.test(match) ? "" : "\n          flatFee",
-      ].join("");
-      return `${open}${additions}${rest}`;
-    });
+    if (!query) return query;
+    const text = String(query);
+    let output = "", cursor = 0, changed = false;
+    const pricingStartRe = /pricing\s*\{/g;
+    for (let match; (match = pricingStartRe.exec(text));) {
+      const openIndex = text.indexOf("{", match.index);
+      const closeIndex = findMatchingBrace(text, openIndex);
+      if (openIndex < 0 || closeIndex < 0) break;
+      const block = text.slice(match.index, closeIndex + 1);
+      const inner = text.slice(openIndex + 1, closeIndex);
+      output += text.slice(cursor, match.index);
+      if (!/\busagePerUnit\b/.test(inner)) {
+        output += block;
+      } else {
+        const additions = [
+          HAS_MODE_RE.test(inner) ? "" : "\n          mode",
+          HAS_FLAT_FEE_RE.test(inner) ? "" : "\n          flatFee",
+        ].join("");
+        output += `${text.slice(match.index, openIndex + 1)}${additions}${inner}}`;
+        changed = changed || Boolean(additions);
+      }
+      cursor = closeIndex + 1;
+      pricingStartRe.lastIndex = closeIndex + 1;
+    }
+    output += text.slice(cursor);
+    return changed ? output : query;
+  }
+
+  function findMatchingBrace(text, openIndex) {
+    if (openIndex < 0 || text[openIndex] !== "{") return -1;
+    let depth = 0;
+    for (let index = openIndex; index < text.length; index += 1) {
+      if (text[index] === "{") depth += 1;
+      else if (text[index] === "}") {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    return -1;
   }
 
   function normalizePriceFilter(value) {
@@ -280,19 +342,13 @@
   function priceMatchesProviderForModel(provider, mode) {
     const modelID = provider?.modelID || currentMarketplaceModelID();
     const detail = channelFreeStateForModelDetail(provider?.channel, modelID);
-    if (mode === "free" && detail.free === true && detail.reason === "implicit_missing_row" && provider?.channel?.id) {
-      rememberModelPageImplicitFree(provider.channel.id, modelID);
-    }
+    if (mode === "free") rememberImplicitFreeModelPageContext(provider?.channel, modelID, detail);
     return mode === "free" ? detail.free === true : detail.free === false;
   }
 
   function marketplaceChannelFreeState(channel) {
     if (typeof channel?.priceSummary?.allFree === "boolean") return channel.priceSummary.allFree;
     return null;
-  }
-
-  function channelFreeStateForModel(channel, modelID = "") {
-    return channelFreeStateForModelDetail(channel, modelID).free;
   }
 
   function channelFreeStateForModelDetail(channel, modelID = "") {
@@ -306,6 +362,12 @@
     const modelPrice = findModelPriceRow(prices, modelID);
     if (!modelPrice) return { free: true, reason: "implicit_missing_row" };
     return { free: modelPriceItemsFree(modelPrice?.price?.items), reason: "explicit_row" };
+  }
+
+  function rememberImplicitFreeModelPageContext(channel, modelID, detail) {
+    if (detail.free === true && detail.reason === "implicit_missing_row" && channel?.id) {
+      rememberModelPageImplicitFree(channel.id, modelID);
+    }
   }
 
   function modelPriceItemsFree(items) {
@@ -532,7 +594,7 @@
     if (!channel?.priceSummary?.hasPrices) return [];
     const supportedModels = matchedSupportedModels(channel, search);
     if (!supportedModels.length) return [];
-    const existing = new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+    const existing = existingModelPriceIDSet(prices);
     return supportedModels
       .filter((modelID) => !existing.has(normalizeModelID(modelID)))
       .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
@@ -544,8 +606,12 @@
     if (currentPriceFilter() !== "free") return [];
     const modelID = currentMarketplaceModelID();
     if (!modelID || !hasModelPageImplicitFree(channelID, modelID)) return [];
-    const existing = new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+    const existing = existingModelPriceIDSet(prices);
     return existing.has(normalizeModelID(modelID)) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
+  }
+
+  function existingModelPriceIDSet(prices) {
+    return new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
   }
 
   function createImplicitFreePriceRow(channelID, modelID) {
@@ -620,10 +686,6 @@
 
   function cleanMarketplaceSearch(value) {
     return String(value || "").replace(ZERO_WIDTH_RE, "").trim();
-  }
-
-  function hasMarketplaceSearchMarker(value) {
-    return HAS_ZERO_WIDTH_RE.test(String(value || ""));
   }
 
   function cleanText(value) {
@@ -1136,9 +1198,7 @@
       if (!channel?.id) continue;
       const providerModelID = provider?.modelID || modelID;
       const detail = channelFreeStateForModelDetail(channel, providerModelID);
-      if (detail.free === true && detail.reason === "implicit_missing_row") {
-        rememberModelPageImplicitFree(channel.id, providerModelID);
-      }
+      rememberImplicitFreeModelPageContext(channel, providerModelID, detail);
       const state = detail.free;
       for (const key of modelProviderCacheKeys(channel.id, modelID)) modelProviderPriceCache.set(key, state);
     }
@@ -1697,9 +1757,7 @@
   function apiKeyValue(key) { return String(key?.key || ""); }
 
   function setCreatedKeyValue(value) {
-    const dialog = document.getElementById(DIALOG_ID);
-    if (!dialog) return;
-    dialog.dataset.createdKeyValue = value || "";
+    createdKeyValueCache = String(value || "");
     syncActionButtons();
   }
 
@@ -1710,7 +1768,7 @@
     setStatus("已复制新 API Key");
   }
 
-  function createdKeyValue() { return document.getElementById(DIALOG_ID)?.dataset?.createdKeyValue || ""; }
+  function createdKeyValue() { return createdKeyValueCache; }
 
   function syncActionButtons() {
     const dialog = document.getElementById(DIALOG_ID);
@@ -1886,6 +1944,8 @@
       normalizePriceFilter,
       requestUrl,
       requestBodyText,
+      readRequestBodyText,
+      withMarketplaceModelPricingFields,
       rememberModelProviderPricesFromPayload,
       channelLabel,
       loadMissingChannelNames: testLoadMissingChannelNames,
