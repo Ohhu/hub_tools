@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.2.3
+// @version      0.2.4.2
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -21,6 +21,8 @@
   const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
   const CHANNEL_NAME_LOOKUP_LIMIT = 20;
   const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
+  const IMPLICIT_FREE_PRICE_LIMIT = 50;
+  const IMPLICIT_FREE_PRICE_ROW_PREFIX = "implicit-free";
   const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
   const HAS_ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/;
   const WHITESPACE_RE = /\s+/g;
@@ -35,6 +37,7 @@
   const channelCache = new Map(), channelNameCache = new Map();
   const channelNameRequestCache = new Map();
   const modelProviderPriceCache = new Map();
+  const channelModelPricesCache = new Map();
   let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
   let selectedPriceFilter = "all";
   let lastMarketplaceChannelsFetchAt = 0;
@@ -48,6 +51,7 @@
     getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
     getKeyValue: "query GetApiKeyValue($id:ID!){node(id:$id){... on APIKey{id key}}}",
     getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
+    getChannelModelPrices: "query ChannelModelPrices($id:ID!){node(id:$id){... on Channel{id channelModelPrices{id modelID price{items{itemCode multiplier pricing{mode flatFee usagePerUnit usageTiered{tiers{upTo pricePerUnit}}} promptWriteCacheVariants{variantCode pricing{mode flatFee usagePerUnit}}}}}}}}",
     updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
     me: "query Me{me{id projects{projectID}}}",
   };
@@ -56,6 +60,7 @@
     const sanitizedRequest = sanitizeMarketplaceChannelsRequest(input, init);
     const nextRequest = withMarketplaceModelPricingFields(sanitizedRequest.input, sanitizedRequest.init);
     if (isMarketplaceChannelsUrl(requestUrl(nextRequest.input))) lastMarketplaceChannelsFetchAt = Date.now();
+    rememberRequestHeaders(nextRequest.input, nextRequest.init);
     const response = await nativeFetch(nextRequest.input, nextRequest.init);
     rememberGraphqlContext(nextRequest.input, nextRequest.init);
     rememberResponseChannels(response);
@@ -75,6 +80,13 @@
   function rememberGraphqlContext(input, init) {
     const url = typeof input === "string" ? input : input?.url;
     if (!String(url || "").includes(GRAPHQL_PATH)) return;
+    rememberGraphqlHeaders(input, init);
+  }
+
+  function rememberRequestHeaders(input, init) {
+    const url = requestUrl(input);
+    const path = String(url || "").replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
+    if (!path.startsWith("/admin/")) return;
     rememberGraphqlHeaders(input, init);
   }
 
@@ -110,6 +122,9 @@
 
   async function filterMarketplaceResponseJson(input, init, response, price) {
     const payload = await response.clone().json();
+    if (isGraphqlChannelModelPricesRequest(input, init, response)) {
+      return augmentChannelModelPricesPayload(input, init, payload);
+    }
     const mode = normalizePriceFilter(price);
     if (mode === "all") return payload;
     if (isMarketplaceChannelsUrl(requestUrl(input))) {
@@ -117,14 +132,15 @@
       rememberChannelsFromPayload(filteredPayload);
       return filteredPayload;
     }
-    const filteredPayload = filterMarketplacePayloadByPrice(payload, mode);
+    const filteredPayload = await filterMarketplacePayloadByPrice(payload, mode);
     rememberChannelsFromPayload(filteredPayload);
     return filteredPayload;
   }
 
   function shouldFilterMarketplaceResponse(input, init, response) {
     if (isMarketplaceChannelsUrl(requestUrl(input))) return true;
-    return isGraphqlMarketplaceModelRequest(input, init, response);
+    return isGraphqlMarketplaceModelRequest(input, init, response)
+      || isGraphqlChannelModelPricesRequest(input, init, response);
   }
 
   function isMarketplaceChannelsUrl(url) {
@@ -140,6 +156,25 @@
     if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
     const body = requestBodyText(input, init);
     return body.includes("MarketplaceModel") || body.includes("marketplaceModel");
+  }
+
+  function isGraphqlChannelModelPricesRequest(input, init, response) {
+    const path = requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
+    if (path !== GRAPHQL_PATH) return false;
+    if (!location.pathname.startsWith("/marketplace")) return false;
+    if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
+    const body = requestBodyText(input, init);
+    const operationName = graphqlOperationName(body);
+    return operationName === "ChannelModelPrices"
+      || /query\s+ChannelModelPrices\b/.test(body);
+  }
+
+  function graphqlOperationName(bodyText) {
+    try {
+      return JSON.parse(String(bodyText || "")).operationName || "";
+    } catch {
+      return "";
+    }
   }
 
   function requestUrl(input) {
@@ -207,12 +242,12 @@
     return payload?.data?.marketplaceModel?.modelID || currentMarketplaceModelID();
   }
 
-  function filterMarketplacePayloadByPrice(payload, price) {
+  async function filterMarketplacePayloadByPrice(payload, price) {
     const mode = normalizePriceFilter(price);
     if (mode === "all") return payload;
     if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
       const providers = payload.data.marketplaceModel.providers.filter((provider) =>
-        priceMatchesChannelForModel(provider?.channel, mode),
+        priceMatchesProviderForModel(provider, mode),
       );
       return {
         ...payload,
@@ -226,7 +261,7 @@
       };
     }
     if (!Array.isArray(payload?.items)) return payload;
-    const items = filterMarketplaceChannelItems(payload.items, mode);
+    const items = await filterMarketplaceChannelItems(payload.items, mode, "");
     return {
       ...payload,
       items,
@@ -241,8 +276,8 @@
     return mode === "free" ? freeState === true : freeState === false;
   }
 
-  function priceMatchesChannelForModel(channel, mode) {
-    const freeState = channelFreeStateForModel(channel);
+  function priceMatchesProviderForModel(provider, mode) {
+    const freeState = channelFreeStateForModel(provider?.channel, provider?.modelID || currentMarketplaceModelID());
     return mode === "free" ? freeState === true : freeState === false;
   }
 
@@ -251,24 +286,48 @@
     return null;
   }
 
-  function channelFreeStateForModel(channel) {
+  function channelFreeStateForModel(channel, modelID = "") {
     if (!Array.isArray(channel?.channelModelPrices)) return true;
     const prices = channel.channelModelPrices;
     if (prices.length === 0) return true;
-    return prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items));
+    const normalizedModelID = normalizeModelID(modelID);
+    if (!normalizedModelID) return prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items));
+    const modelPrice = prices.find((price) => normalizeModelID(price?.modelID) === normalizedModelID);
+    return modelPrice ? modelPriceItemsFree(modelPrice?.price?.items) : true;
   }
 
   function modelPriceItemsFree(items) {
+    if (!Array.isArray(items) || items.length === 0) return false;
     return (items || []).every((item) => {
       const pricing = item?.pricing || {};
-      return parsePositiveNumber(pricing.usagePerUnit) <= 0
-        && parsePositiveNumber(pricing.flatFee) <= 0;
+      return pricingFree(pricing)
+        && (item?.promptWriteCacheVariants || []).every((variant) => pricingFree(variant?.pricing));
     });
   }
 
-  function parsePositiveNumber(value) {
+  function pricingFree(pricing) {
+    if (!pricing) return false;
+    if (pricing.mode === "flat_fee") return priceNumberFree(pricing.flatFee);
+    if (pricing.mode === "usage_per_unit") return priceNumberFree(pricing.usagePerUnit);
+    if (pricing.mode === "usage_tiered") {
+      const tiers = pricing.usageTiered?.tiers || [];
+      return tiers.length > 0 && tiers.every((tier) => priceNumberFree(tier?.pricePerUnit));
+    }
+    const values = [pricing.usagePerUnit, pricing.flatFee]
+      .concat((pricing.usageTiered?.tiers || []).map((tier) => tier?.pricePerUnit))
+      .map(parsePriceNumber)
+      .filter((number) => number !== null);
+    return values.length > 0 && values.every((number) => number <= 0);
+  }
+
+  function priceNumberFree(value) {
+    const number = parsePriceNumber(value);
+    return number !== null && number <= 0;
+  }
+
+  function parsePriceNumber(value) {
     const number = Number.parseFloat(value);
-    return Number.isFinite(number) && number > 0 ? number : 0;
+    return Number.isFinite(number) ? number : null;
   }
 
   function normalizeModelID(modelID) {
@@ -277,6 +336,7 @@
 
   async function loadFilteredMarketplaceChannelsPayload(input, init, firstPayload, mode) {
     if (!Array.isArray(firstPayload?.items)) return firstPayload;
+    const search = cleanMarketplaceSearch(marketplaceChannelsUrl(input).searchParams.get("search"));
     const first = marketplacePageSize(input, firstPayload);
     const targetPage = marketplacePageNumber(input, firstPayload);
     const needed = Math.max(first, targetPage * first);
@@ -285,8 +345,8 @@
     let pageNumber = marketplacePayloadPageNumber(sourcePage, input);
     let maxPages = Math.max(marketplacePayloadTotalPages(firstPayload), marketplacePayloadTotalPages(sourcePage));
     while (sourcePage && pageNumber <= maxPages) {
-      items.push(...filterMarketplaceChannelItems(sourcePage.items, mode));
-      if (shouldStopMarketplacePriceScan(sourcePage.items, mode) || items.length >= needed || pageNumber >= maxPages) break;
+      items.push(...await filterMarketplaceChannelItems(sourcePage.items, mode, search, input, init));
+      if (shouldStopMarketplacePriceScan(sourcePage.items, mode, search) || items.length >= needed || pageNumber >= maxPages) break;
       if (!Array.isArray(sourcePage.items) || sourcePage.items.length === 0) break;
       pageNumber += 1;
       sourcePage = await fetchMarketplaceChannelsPage(input, init, pageNumber);
@@ -304,8 +364,169 @@
     };
   }
 
-  function filterMarketplaceChannelItems(items, mode) {
-    return (items || []).filter((item) => priceMatchesChannel(item, mode));
+  async function filterMarketplaceChannelItems(items, mode, search, input, init) {
+    const checks = await Promise.all((items || []).map(async (item) =>
+      priceMatchesMarketplaceChannel(item, mode, search, input, init).catch(() => {
+        if (normalizePriceFilter(mode) === "free" && cleanMarketplaceSearch(search)) return false;
+        return priceMatchesChannel(item, mode);
+      }),
+    ));
+    return (items || []).filter((_, index) => checks[index]);
+  }
+
+  async function priceMatchesMarketplaceChannel(channel, mode, search, input, init) {
+    if (normalizePriceFilter(mode) !== "free" || !search) return priceMatchesChannel(channel, mode);
+    const freeState = await marketplaceChannelFreeStateForSearch(channel, search, input, init);
+    return freeState === true;
+  }
+
+  async function marketplaceChannelFreeStateForSearch(channel, search, input, init) {
+    const matchedModels = matchedSupportedModels(channel, search);
+    if (!matchedModels.length) return marketplaceChannelFreeState(channel);
+    if (!channel?.priceSummary?.hasPrices) return true;
+    const prices = await loadChannelModelPrices(channel.id, input, init);
+    if (!Array.isArray(prices)) return false;
+    return matchedModels.some((modelID) => modelFreeInPriceRows(modelID, prices));
+  }
+
+  function matchedSupportedModels(channel, search) {
+    const needle = normalizeModelID(search);
+    if (!needle || !Array.isArray(channel?.supportedModels)) return [];
+    return channel.supportedModels.filter((modelID) => normalizeModelID(modelID).includes(needle));
+  }
+
+  function modelFreeInPriceRows(modelID, prices) {
+    const row = findModelPriceRow(prices, modelID);
+    return row ? modelPriceItemsFree(row?.price?.items) : true;
+  }
+
+  function findModelPriceRow(prices, modelID) {
+    const normalizedModelID = normalizeModelID(modelID);
+    return (prices || []).find((price) => normalizeModelID(price?.modelID) === normalizedModelID) || null;
+  }
+
+  async function loadChannelModelPrices(channelID, input, init) {
+    const cacheKey = channelCacheKey(channelID);
+    if (!cacheKey) return [];
+    if (channelModelPricesCache.has(cacheKey)) {
+      const cached = channelModelPricesCache.get(cacheKey);
+      if (cached && typeof cached.then === "function") return cached;
+      if (Array.isArray(cached)) return cached;
+      channelModelPricesCache.delete(cacheKey);
+    }
+    const request = graphqlWithRequestContext(
+      queries.getChannelModelPrices,
+      { id: channelGID(channelID) },
+      "ChannelModelPrices",
+      input,
+      init,
+    )
+      .then((data) => data?.node?.channelModelPrices || [])
+      .then((prices) => {
+        cacheChannelModelPrices(channelID, prices);
+        return prices;
+      })
+      .catch(() => {
+        channelModelPricesCache.delete(cacheKey);
+        return null;
+      });
+    channelModelPricesCache.set(cacheKey, request);
+    return request;
+  }
+
+  async function graphqlWithRequestContext(query, variables = {}, operationName = undefined, input, init) {
+    const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
+    const headers = new Headers(init?.headers || request?.headers || {});
+    headers.set("content-type", "application/json");
+    if (!headers.has("x-project-id")) headers.set("x-project-id", graphqlHeaders.projectID);
+    if (!headers.has("authorization") && graphqlHeaders.authorization) headers.set("authorization", graphqlHeaders.authorization);
+    const response = await nativeFetch(new URL(GRAPHQL_PATH, location.origin), {
+      method: "POST",
+      credentials: init?.credentials || request?.credentials || "same-origin",
+      headers,
+      body: JSON.stringify({ query, variables, operationName }),
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.errors?.length) throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
+    return payload.data;
+  }
+
+  function cacheChannelModelPrices(channelID, prices) {
+    const cacheKey = channelCacheKey(channelID);
+    if (!cacheKey || !Array.isArray(prices)) return;
+    channelModelPricesCache.set(cacheKey, prices);
+    const numericID = extractNumericChannelID(channelID);
+    if (numericID) channelModelPricesCache.set(String(numericID), prices);
+  }
+
+  function channelCacheKey(channelID) {
+    const numericID = extractNumericChannelID(channelID);
+    return numericID ? String(numericID) : String(channelID || "");
+  }
+
+  function channelGID(channelID) {
+    const numericID = extractNumericChannelID(channelID);
+    return numericID ? `gid://axonhub/Channel/${numericID}` : String(channelID || "");
+  }
+
+  function augmentChannelModelPricesPayload(input, init, payload) {
+    const channel = payload?.data?.node;
+    const prices = channel?.channelModelPrices;
+    if (!channel?.id || !Array.isArray(prices)) return payload;
+    cacheChannelModelPrices(channel.id, prices);
+    const implicitRows = implicitFreePriceRowsForCurrentSearch(channel.id, prices);
+    if (!implicitRows.length) return payload;
+    return {
+      ...payload,
+      data: {
+        ...payload.data,
+        node: {
+          ...channel,
+          channelModelPrices: [...implicitRows, ...prices],
+        },
+      },
+    };
+  }
+
+  function implicitFreePriceRowsForCurrentSearch(channelID, prices) {
+    const search = cleanMarketplaceSearch(findMarketplaceSearchInput()?.value);
+    if (!search) return [];
+    const channel = findCachedChannelByID(channelID);
+    if (!channel?.priceSummary?.hasPrices) return [];
+    const supportedModels = matchedSupportedModels(channel, search);
+    if (!supportedModels.length) return [];
+    const existing = new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+    return supportedModels
+      .filter((modelID) => !existing.has(normalizeModelID(modelID)))
+      .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
+      .map((modelID) => createImplicitFreePriceRow(channelID, modelID));
+  }
+
+  function createImplicitFreePriceRow(channelID, modelID) {
+    return {
+      id: `${IMPLICIT_FREE_PRICE_ROW_PREFIX}:${channelCacheKey(channelID)}:${modelID}`,
+      modelID,
+      price: {
+        items: [
+          createZeroPriceItem("prompt_tokens"),
+          createZeroPriceItem("completion_tokens"),
+        ],
+      },
+    };
+  }
+
+  function createZeroPriceItem(itemCode) {
+    return {
+      itemCode,
+      multiplier: 0,
+      pricing: {
+        mode: "usage_per_unit",
+        flatFee: 0,
+        usagePerUnit: 0,
+        usageTiered: { tiers: [] },
+      },
+      promptWriteCacheVariants: [],
+    };
   }
 
   function marketplacePageSize(input, payload) {
@@ -363,8 +584,9 @@
     return String(value || "").replace(WHITESPACE_RE, " ").trim();
   }
 
-  function shouldStopMarketplacePriceScan(items, mode) {
+  function shouldStopMarketplacePriceScan(items, mode, search) {
     if (normalizePriceFilter(mode) !== "free") return false;
+    if (cleanMarketplaceSearch(search)) return false;
     return (items || []).some((item) => marketplaceChannelFreeState(item) === false);
   }
 
@@ -457,8 +679,12 @@
   }
 
   function insertPriceFilter() {
-    if (!isMarketplaceChannelsTabActive()) {
+    if (!location.pathname.startsWith("/marketplace")) {
       resetPriceFilterState();
+      document.getElementById(PRICE_FIELD_ID)?.remove();
+      return;
+    }
+    if (!isMarketplaceChannelsTabActive()) {
       document.getElementById(PRICE_FIELD_ID)?.remove();
       return;
     }
@@ -479,7 +705,8 @@
 
   function isMarketplaceChannelsTabActive() {
     if (!location.pathname.startsWith("/marketplace")) return false;
-    const selected = document.querySelector('[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]');
+    const root = document.querySelector("main") || document;
+    const selected = root.querySelector('[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]');
     return !selected || /渠道广场|channel/i.test(String(selected.textContent || ""));
   }
 
@@ -765,6 +992,11 @@
     return channelNameCache.get(normalizeChannelName(name));
   }
 
+  function findCachedChannelByID(channelID) {
+    const cacheKey = channelCacheKey(channelID);
+    return cacheKey ? channelCache.get(cacheKey) : null;
+  }
+
   function updateTriggerChannel(trigger, channel) {
     trigger.dataset.channelName = channel.name;
     if (channel.id) trigger.dataset.channelId = channel.id;
@@ -856,7 +1088,7 @@
     for (const provider of providers) {
       const channel = provider?.channel;
       if (!channel?.id) continue;
-      const state = channelFreeStateForModel(channel);
+      const state = channelFreeStateForModel(channel, provider?.modelID || modelID);
       for (const key of modelProviderCacheKeys(channel.id, modelID)) modelProviderPriceCache.set(key, state);
     }
   }
@@ -884,9 +1116,23 @@
 
   function rememberChannel(channel) {
     if (!channel?.id || !channel?.name) return false;
-    const item = { id: String(channel.id), name: String(channel.name) };
+    const item = {
+      id: String(channel.id),
+      name: String(channel.name),
+      type: channel.type,
+      supportedModels: Array.isArray(channel.supportedModels) ? channel.supportedModels.slice() : undefined,
+      priceSummary: channel.priceSummary,
+    };
     const existing = channelCache.get(item.id);
-    if (existing?.name === item.name) return false;
+    if (existing) {
+      item.type ??= existing.type;
+      item.supportedModels ??= existing.supportedModels;
+      item.priceSummary ??= existing.priceSummary;
+      if (existing.name === item.name
+        && existing.type === item.type
+        && existing.supportedModels === item.supportedModels
+        && existing.priceSummary === item.priceSummary) return false;
+    }
     channelCache.set(item.id, item);
     const numericID = extractNumericChannelID(item.id);
     if (numericID) channelCache.set(String(numericID), item);
@@ -941,7 +1187,7 @@
       #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
       #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 14%,transparent);padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:var(--border,#cbd5e1) transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:var(--border,#cbd5e1)}
-      #${DIALOG_ID} .hkb-channel-row{min-height:34px;display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:8px;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-remove{border:none;background:transparent;color:var(--muted-foreground,#6b7280);padding:0 6px;min-height:26px;font-size:12px}#${DIALOG_ID} .hkb-remove:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}
+      #${DIALOG_ID} .hkb-channel-row{min-height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:8px;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-index{width:22px;flex-shrink:0;color:var(--muted-foreground,#64748b);font-size:12px;font-variant-numeric:tabular-nums;text-align:center}#${DIALOG_ID} .hkb-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-channel-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}#${DIALOG_ID} .hkb-row-btn{width:26px;height:26px;min-height:26px;border-color:transparent}#${DIALOG_ID} .hkb-row-btn svg{width:14px;height:14px}#${DIALOG_ID} .hkb-remove{color:var(--muted-foreground,#6b7280)}#${DIALOG_ID} .hkb-remove:hover{color:var(--destructive,#dc2626)}
       #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:var(--muted-foreground,#9ca3af);font-size:13px}
       #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid var(--border,#f3f4f6)}
       #${DIALOG_ID} .hkb-edit-actions{border-top:none;padding-top:18px}
@@ -994,6 +1240,10 @@
     }
     if (action === "edit-remove-channel") {
       removeEditChannel(actionEl.dataset.channelId || "");
+      return;
+    }
+    if (action === "edit-move-channel") {
+      moveEditChannel(actionEl.dataset.channelId || "", actionEl.dataset.direction || "down");
       return;
     }
     if (!actionEl.closest?.('[data-role="key-picker"]')) closeKeyMenu();
@@ -1341,6 +1591,19 @@
     setEditStatus("已移除，保存后生效");
   }
 
+  function moveEditChannel(channelID, direction) {
+    const numericID = extractNumericChannelID(channelID);
+    const currentIndex = editChannelIDs.indexOf(numericID);
+    const offset = direction === "up" ? -1 : 1;
+    const nextIndex = currentIndex + offset;
+    if (!numericID || currentIndex < 0 || nextIndex < 0 || nextIndex >= editChannelIDs.length) return;
+    const nextIDs = [...editChannelIDs];
+    [nextIDs[currentIndex], nextIDs[nextIndex]] = [nextIDs[nextIndex], nextIDs[currentIndex]];
+    editChannelIDs = nextIDs;
+    renderEditChannelList();
+    setEditStatus("已调整顺序，保存后生效");
+  }
+
   async function saveEditBindings() {
     if (!selectedKeyID) throw new Error("请先选择 API Key");
     setEditStatus("正在保存绑定渠道");
@@ -1355,8 +1618,23 @@
     const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
     if (!list) return;
     list.innerHTML = editChannelIDs.length
-      ? editChannelIDs.map((id) => `<div class="hkb-channel-row"><span>${escapeHtml(channelLabel(id))}</span><button type="button" class="hkb-remove" data-action="edit-remove-channel" data-channel-id="${escapeHtml(id)}">移除</button></div>`).join("")
+      ? editChannelIDs.map((id, index) => renderEditChannelRow(id, index)).join("")
       : `<div class="hkb-empty">暂无绑定渠道</div>`;
+  }
+
+  function renderEditChannelRow(channelID, index) {
+    const safeID = escapeHtml(channelID);
+    const isFirst = index === 0;
+    const isLast = index === editChannelIDs.length - 1;
+    return `<div class="hkb-channel-row" data-channel-id="${safeID}">
+      <span class="hkb-channel-index">${index + 1}</span>
+      <span class="hkb-channel-name">${escapeHtml(channelLabel(channelID))}</span>
+      <span class="hkb-channel-actions">
+        <button type="button" class="hkb-icon-btn hkb-row-btn" data-action="edit-move-channel" data-direction="up" data-channel-id="${safeID}" title="上移" aria-label="上移" ${isFirst ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"></path></svg></button>
+        <button type="button" class="hkb-icon-btn hkb-row-btn" data-action="edit-move-channel" data-direction="down" data-channel-id="${safeID}" title="下移" aria-label="下移" ${isLast ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+        <button type="button" class="hkb-icon-btn hkb-row-btn hkb-remove" data-action="edit-remove-channel" data-channel-id="${safeID}" title="移除" aria-label="移除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button>
+      </span>
+    </div>`;
   }
 
   function channelLabel(channelID) {
@@ -1545,6 +1823,7 @@
       buildProfilesInput,
       buildProfilesInputWithChannelIDs,
       findMarketplaceFilterFields,
+      isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
       ensurePricingFields,
       marketplaceChannelsScanUrl,

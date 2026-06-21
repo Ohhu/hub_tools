@@ -66,17 +66,7 @@ class FakeElement {
     const results = [];
     const visit = (node) => {
       for (const child of node.children) {
-        if (
-          selector === "[data-slot=\"card-title\"]" &&
-          child.attributes["data-slot"] === "card-title"
-        ) {
-          results.push(child);
-        } else if (
-          selector === "[role=\"combobox\"]" &&
-          child.attributes.role === "combobox"
-        ) {
-          results.push(child);
-        } else if (selector === "*" || selector === "button") {
+        if (matchesFakeSelector(child, selector)) {
           results.push(child);
         }
         visit(child);
@@ -93,9 +83,21 @@ class FakeElement {
   }
 }
 
+function matchesFakeSelector(node, selector) {
+  return String(selector).split(",").some((part) => {
+    const value = part.trim();
+    if (value === "[data-slot=\"card-title\"]") return node.attributes["data-slot"] === "card-title";
+    if (value === "[role=\"combobox\"]") return node.attributes.role === "combobox";
+    if (value === "[role=\"tab\"][aria-selected=\"true\"]") return node.attributes.role === "tab" && node.attributes["aria-selected"] === "true";
+    if (value === "[role=\"tab\"][data-state=\"active\"]") return node.attributes.role === "tab" && node.attributes["data-state"] === "active";
+    return value === "*" || value === "button";
+  });
+}
+
 function loadHelpers() {
   const source = fs.readFileSync("LinuxDo Hub Tool.user.js", "utf8");
   const documentElement = new FakeElement();
+  const documentState = { main: null, selectedTab: null };
   const context = {
     Headers,
     MutationObserver: class { observe() {} },
@@ -106,6 +108,11 @@ function loadHelpers() {
       addEventListener() {},
       createElement: () => new FakeElement(),
       getElementById: () => null,
+      querySelector: (selector) => {
+        if (selector === "main") return documentState.main;
+        if (selector === '[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]') return documentState.selectedTab;
+        return null;
+      },
       querySelectorAll: () => [],
     },
     location: { pathname: "/marketplace", origin: "https://hub.linux.do" },
@@ -126,6 +133,8 @@ function loadHelpers() {
   context.window.Headers = Headers;
   context.window.URL = URL;
   vm.runInNewContext(source, context.window);
+  context.window.__hubKeyBinderTest.__documentState = documentState;
+  context.window.__hubKeyBinderTest.__location = context.location;
   return context.window.__hubKeyBinderTest;
 }
 
@@ -147,7 +156,7 @@ assert.equal(source.includes('data-role="key-trigger"'), true);
 assert.equal(source.includes('data-role="key-menu"'), true);
 assert.equal(source.includes('data-action="select-key"'), true);
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.2.3"), true);
+assert.equal(source.includes("// @version      0.2.4"), true);
 assert.equal(source.includes("getKeyValue:"), true);
 assert.equal(source.includes("getKeys: \"query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}\""), true);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), false);
@@ -171,6 +180,8 @@ assert.equal(source.includes("hkb-edit-actions{border-top:none;padding-top:18px"
 assert.equal(source.includes('data-role="edit-key-picker"'), true);
 assert.equal(source.includes('data-role="edit-key-label"'), true);
 assert.equal(source.includes("hkb-edit-list{height:100%;min-height:92px"), true);
+assert.equal(source.includes("hkb-drag-handle"), false);
+assert.equal(source.includes('draggable="true"'), false);
 assert.equal(source.includes('>⧉</button>'), false);
 assert.equal(source.includes('>↻</button>'), false);
 assert.equal(source.includes("node{id createdAt updatedAt user{id firstName lastName email avatar linuxdoUserID linuxdoUsername"), false);
@@ -571,6 +582,24 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
   const anchors = helpers.findMarketplaceFilterFields(fields);
   assert.strictEqual(anchors.tags, tagsField);
   assert.strictEqual(anchors.sort, sortField);
+}
+
+{
+  const main = new FakeElement();
+  helpers.__documentState.main = main;
+  new FakeElement({
+    text: "渠道广场",
+    attrs: { role: "tab", "aria-selected": "true" },
+    parent: main,
+  });
+  helpers.__documentState.selectedTab = new FakeElement({
+    text: "绑定渠道",
+    attrs: { role: "tab", "aria-selected": "true" },
+  });
+  helpers.__location.pathname = "/marketplace";
+  assert.equal(helpers.isMarketplaceChannelsTabActive(), true);
+  helpers.__location.pathname = "/project/api-keys";
+  assert.equal(helpers.isMarketplaceChannelsTabActive(), false);
 }
 
 console.log("minimal binder helpers ok");
