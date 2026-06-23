@@ -164,7 +164,7 @@ assert.equal(source.includes('data-role="key-trigger"'), true);
 assert.equal(source.includes('data-role="key-menu"'), true);
 assert.equal(source.includes('data-action="select-key"'), true);
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.2.4"), true);
+assert.equal(source.includes("// @version      0.3"), true);
 assert.equal(source.includes("getKeyValue:"), true);
 assert.equal(source.includes("getKeys: \"query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}\""), true);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), false);
@@ -224,6 +224,12 @@ assert.equal(source.includes("border:1px solid var(--border"), true);
 assert.equal(source.includes("background:var(--primary,#111827)"), true);
 assert.equal(source.includes("color-mix(in oklab"), true);
 assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
+assert.equal(source.includes("REQUEST_TRIGGER_CLASS"), true);
+assert.equal(source.includes("function insertRequestTriggers"), true);
+assert.equal(source.includes("function isRequestsConsumerRoute"), true);
+assert.equal(source.includes("function findRequestsApiKeyFilterButton"), true);
+assert.equal(source.includes("function openRequestEditDialog"), true);
+assert.equal(source.includes("@media (max-width:360px)"), true);
 
 {
   const input = {
@@ -677,6 +683,16 @@ assert.equal(source.includes("CHANNEL_NAME_LOOKUP_LIMIT = 20"), true);
   assert.equal(helpers.isMarketplaceChannelsTabActive(), true);
   helpers.__location.pathname = "/project/api-keys";
   assert.equal(helpers.isMarketplaceChannelsTabActive(), false);
+}
+
+{
+  assert.equal(helpers.isTargetRoute("/project/requests"), true);
+  helpers.__location.pathname = "/project/requests";
+  helpers.__location.search = "?view=consumer";
+  assert.equal(helpers.isRequestsConsumerRoute(), true);
+  helpers.__location.search = "?view=producer";
+  assert.equal(helpers.isRequestsConsumerRoute(), false);
+  helpers.__location.search = "";
 }
 
 console.log("minimal binder helpers ok");

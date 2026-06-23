@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.2.4.2
+// @version      0.3.2
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -17,6 +17,7 @@
   const GRAPHQL_PATH = "/admin/graphql";
   const PROJECT_ID = "gid://axonhub/Project/1";
   const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
+  const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
   const DIALOG_ID = `${PANEL_ID}-dialog`;
   const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
   const CHANNEL_NAME_LOOKUP_LIMIT = 20;
@@ -44,6 +45,7 @@
   let lastMarketplaceChannelsFetchAt = 0;
   let editChannelIDs = [];
   let editLoadToken = 0;
+  let editDirty = false;
   let lastPathname = location.pathname;
 
   const queries = {
@@ -734,12 +736,13 @@
   }
 
   function isTargetRoute(pathname = location.pathname) {
-    return pathname.startsWith("/marketplace") || pathname.startsWith("/project/api-keys");
+    return pathname.startsWith("/marketplace") || pathname.startsWith("/project/api-keys") || pathname.startsWith("/project/requests");
   }
 
   function handleRouteChange() {
-    if (lastPathname === location.pathname) return;
-    lastPathname = location.pathname;
+    const route = `${location.pathname}${location.search || ""}`;
+    if (lastPathname === route) return;
+    lastPathname = route;
     scheduleRouteScans();
   }
 
@@ -753,8 +756,41 @@
   function ensurePanel() {
     injectStyle();
     for (const anchor of findCreateApiButtons()) replaceCreateApiButton(anchor);
+    insertRequestTriggers();
     insertPriceFilter();
     applyVisiblePriceFilter();
+  }
+
+  function insertRequestTriggers() {
+    if (!isRequestsConsumerRoute()) {
+      document.querySelectorAll(`.${REQUEST_TRIGGER_CLASS}`).forEach((button) => button.remove?.());
+      return;
+    }
+    const apiKeyButton = findRequestsApiKeyFilterButton();
+    const host = apiKeyButton?.parentElement;
+    if (!apiKeyButton || !host || host.querySelector?.(`.${REQUEST_TRIGGER_CLASS}`)) return;
+    apiKeyButton.insertAdjacentElement("afterend", createRequestEditTrigger(apiKeyButton));
+  }
+
+  function isRequestsConsumerRoute() {
+    if (!location.pathname.startsWith("/project/requests")) return false;
+    const view = new URLSearchParams(location.search || "").get("view");
+    return !view || view === "consumer";
+  }
+
+  function findRequestsApiKeyFilterButton() {
+    return Array.from(document.querySelectorAll("main button"))
+      .find((button) => cleanText(button.textContent) === "API密钥");
+  }
+
+  function createRequestEditTrigger(anchor) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "更新 API 密钥";
+    button.className = anchor.className || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-8 rounded-md px-3";
+    button.classList.add(TRIGGER_CLASS, REQUEST_TRIGGER_CLASS);
+    button.addEventListener("click", openRequestEditDialog);
+    return button;
   }
 
   function findCreateApiButtons() {
@@ -801,13 +837,11 @@
     if (!anchor) return;
     let field = document.getElementById(PRICE_FIELD_ID);
     if (!field) field = createPriceFilterField();
-    cleanupMarketplaceSearchInput();
-    syncPriceFilterField(field);
-    if (anchors.sort) {
-      if (field.parentElement !== anchor) anchor.appendChild(field);
-    } else if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
+    if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
       anchor.insertAdjacentElement("afterend", field);
     }
+    cleanupMarketplaceSearchInput();
+    syncPriceFilterField(field);
     alignPriceFilterWithSort(anchors.sort, field);
   }
 
@@ -818,11 +852,17 @@
     return !selected || /渠道广场|channel/i.test(String(selected.textContent || ""));
   }
 
-  function findMarketplaceFilterFields(fields = Array.from(document.querySelectorAll("main label, main p, main div, main span"))) {
+  function findMarketplaceFilterFields(fields = Array.from(marketplaceChannelsRoot().querySelectorAll("label, p, div, span"))) {
     return {
       tags: filterFieldByLabel(fields, /^(标签|tags?)$/i),
       sort: filterFieldByLabel(fields, /^(排序|sort)$/i),
     };
+  }
+
+  function marketplaceChannelsRoot() {
+    const main = document.querySelector("main") || document;
+    const panels = Array.from(main.querySelectorAll?.('[role="tabpanel"], [data-slot="tabs-content"]') || []);
+    return panels.find((panel) => isElementVisible(panel) && /渠道广场|按渠道名称|全部标签/i.test(String(panel.textContent || ""))) || main;
   }
 
   function filterFieldByLabel(elements, pattern) {
@@ -864,7 +904,8 @@
     const field = document.createElement("div");
     field.id = PRICE_FIELD_ID;
     field.dataset.hubToolPriceFilter = "true";
-    field.innerHTML = `<button type="button" class="hkb-price-button border-input flex items-center justify-center gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]" data-size="default" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
+    field.className = "hkb-price-field";
+    field.innerHTML = `<p class="hkb-price-label">价格</p><button type="button" class="hkb-price-button border-input flex items-center justify-center gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]" data-size="default" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
     field.addEventListener("click", handlePriceFilterClick);
     return field;
   }
@@ -1260,8 +1301,9 @@
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
       .hkb-sort-anchor{position:relative}
-      #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:calc(100% + 12px);bottom:var(--hkb-price-bottom,0px);display:flex;align-items:center;height:36px}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:12px;background:color-mix(in oklab,var(--input,hsl(20 5.9% 90%)) 12%,transparent);color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+      #${PRICE_FIELD_ID}{box-sizing:border-box;display:block;height:56px;min-width:0;margin-bottom:var(--hkb-price-bottom,0px)}
+      #${PRICE_FIELD_ID} .hkb-price-label{height:16px;margin:0 0 4px;color:var(--muted-foreground,hsl(25 5.3% 44.7%));font-size:12px;font-weight:500;line-height:16px;letter-spacing:.025em}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;max-width:220px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:var(--radius-md,calc(var(--radius,.625rem) - 2px));background:transparent;color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;text-align:center;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
       #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}
       #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:var(--ring,var(--foreground,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--foreground,hsl(20 14.3% 4.1%))) 24%,transparent)}
@@ -1302,10 +1344,13 @@
       #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:var(--muted-foreground,#9ca3af);font-size:13px}
       #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid var(--border,#f3f4f6)}
       #${DIALOG_ID} .hkb-edit-actions{border-top:none;padding-top:18px}
+      #${DIALOG_ID} [data-action="save-edit"]{position:relative}
+      #${DIALOG_ID} [data-action="save-edit"][data-dirty="true"]::after{content:"";position:absolute;right:-3px;top:-3px;width:7px;height:7px;border-radius:999px;background:var(--primary,#111827);box-shadow:0 0 0 2px var(--card,#fff)}
       #${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{display:flex;align-items:center;gap:8px}
       #${DIALOG_ID} .hkb-status{color:var(--muted-foreground,#6b7280);font-size:12px;line-height:16px;flex:1;min-width:0}
       #${DIALOG_ID} button:not(.hkb-icon-btn){box-sizing:border-box;height:36px;min-height:36px;line-height:20px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
       #${DIALOG_ID} .hkb-primary{border-color:var(--primary,#111827);background:var(--primary,#111827);color:var(--primary-foreground,#f9fafb)}#${DIALOG_ID} .hkb-primary:hover{background:color-mix(in oklab,var(--primary,#111827) 88%,white)}#${DIALOG_ID} .hkb-secondary{border-color:var(--border,#d1d5db);background:var(--secondary,#f3f4f6);color:var(--secondary-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-secondary:hover{background:var(--accent,#e5e7eb);color:var(--accent-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-ghost{border-color:transparent;background:transparent;color:var(--muted-foreground,#374151)}#${DIALOG_ID} .hkb-ghost:hover{background:var(--accent,#f9fafb);color:var(--accent-foreground,var(--foreground,#374151))}
+      @media (max-width:360px){#${DIALOG_ID}{padding:8px}#${DIALOG_ID} .hkb-card{height:min(388px,calc(100vh - 16px));padding:16px}#${DIALOG_ID} .hkb-edit-row{grid-template-columns:1fr;gap:6px}#${DIALOG_ID} .hkb-edit-row-list .hkb-label{padding-top:0}#${DIALOG_ID} .hkb-actions{flex-wrap:wrap;align-items:flex-start}#${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{flex-wrap:wrap}#${DIALOG_ID} .hkb-status{flex-basis:100%;order:3}}
       html.dark #${DIALOG_ID}{background:rgb(0 0 0 / .56);color:var(--foreground)}
       html.dark #${DIALOG_ID} .hkb-card{box-shadow:0 24px 64px -24px rgb(0 0 0 / .85),0 12px 28px -20px rgb(0 0 0 / .75)}
       html.dark #${DIALOG_ID} .hkb-control{background:color-mix(in oklab,var(--input) 30%,transparent);border-color:var(--border);color:var(--foreground)}
@@ -1378,6 +1423,17 @@
     setKeyMode("update");
     showMainPanel();
     loadKeys().catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
+  }
+
+  function openRequestEditDialog() {
+    ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
+    setCurrentChannel({ id: "", name: "" }, { allowEmpty: true });
+    setCreatedKeyValue("");
+    setKeyMode("update");
+    showMainPanel();
+    loadKeys()
+      .then(() => openEditPanel())
+      .catch((error) => setStatus(error?.message || "API Key 加载失败，请稍后刷新"));
   }
 
   function closeDialog() {
@@ -1620,31 +1676,32 @@
     syncKeyPicker();
   }
 
-  function setCurrentChannel(channel) {
+  function setCurrentChannel(channel, options = {}) {
     const dialog = document.getElementById(DIALOG_ID);
     if (!dialog) return;
     dialog.dataset.channelId = channel.id || "";
     dialog.dataset.channelName = channel.name || "";
     const label = document.querySelector(`#${DIALOG_ID} [data-role="channel-label"]`);
-    if (label) label.textContent = channel.name || "未读取到当前渠道";
-    setStatus(channel.id ? "" : "未读取到渠道 ID，请刷新重试");
+    if (label) label.textContent = channel.name || (options.allowEmpty ? "未指定" : "未读取到当前渠道");
+    setStatus(channel.id || options.allowEmpty ? "" : "未读取到渠道 ID，请刷新重试");
   }
 
   function currentChannelID() {
     const channelID = document.getElementById(DIALOG_ID)?.dataset?.channelId || "";
-    if (!channelID) throw new Error("未读取到当前渠道 ID");
+    if (!channelID) throw new Error("无当前渠道");
     return channelID;
   }
 
   async function openEditPanel() {
     if (!selectedKeyID) throw new Error("请先选择 API Key");
-    const channelID = currentChannelID();
     const dialog = document.getElementById(DIALOG_ID);
     if (!dialog) return;
+    const channelID = dialog.dataset.channelId || "";
     showEditPanel();
-    setEditStatus("正在加载绑定渠道");
+    setEditDirty(false);
+    setEditStatus("加载中");
     const channelLabelEl = dialog.querySelector("[data-role='edit-channel-label']");
-    if (channelLabelEl) channelLabelEl.textContent = channelLabel(channelID);
+    if (channelLabelEl) channelLabelEl.textContent = channelID ? channelLabel(channelID) : "未指定";
     syncKeyPicker();
     const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
     if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
@@ -1665,6 +1722,7 @@
   function showMainPanel() {
     editChannelIDs = [];
     editLoadToken += 1;
+    setEditDirty(false);
     showViewPanel("main");
     setEditStatus("");
   }
@@ -1681,14 +1739,15 @@
 
   function addCurrentChannelToEditList() {
     const numericID = extractNumericChannelID(currentChannelID());
-    if (!numericID) throw new Error("未读取到当前渠道 ID");
+    if (!numericID) throw new Error("无当前渠道");
     if (editChannelIDs.includes(numericID)) {
-      setEditStatus("当前渠道已在列表中");
+      setEditStatus("已存在");
       return;
     }
     editChannelIDs = [...editChannelIDs, numericID];
     renderEditChannelList();
-    setEditStatus("已添加，保存后生效");
+    setEditDirty(true);
+    setEditStatus("已添加");
   }
 
   function removeEditChannel(channelID) {
@@ -1699,7 +1758,8 @@
     }
     editChannelIDs = editChannelIDs.filter((id) => id !== numericID);
     renderEditChannelList();
-    setEditStatus("已移除，保存后生效");
+    setEditDirty(true);
+    setEditStatus("已移除");
   }
 
   function moveEditChannel(channelID, direction) {
@@ -1712,17 +1772,19 @@
     [nextIDs[currentIndex], nextIDs[nextIndex]] = [nextIDs[nextIndex], nextIDs[currentIndex]];
     editChannelIDs = nextIDs;
     renderEditChannelList();
-    setEditStatus("已调整顺序，保存后生效");
+    setEditDirty(true);
+    setEditStatus("已调整");
   }
 
   async function saveEditBindings() {
     if (!selectedKeyID) throw new Error("请先选择 API Key");
-    setEditStatus("正在保存绑定渠道");
+    setEditStatus("保存中");
     const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
     if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
     const input = buildProfilesInputWithChannelIDs(data.node.profiles, editChannelIDs);
     await graphql(queries.updateProfiles, { id: selectedKeyID, input }, "UpdateAPIKeyProfiles");
-    setEditStatus("已保存绑定渠道");
+    setEditDirty(false);
+    setEditStatus("已保存");
   }
 
   function renderEditChannelList() {
@@ -1841,6 +1903,11 @@
   function setEditStatus(message) {
     const status = document.querySelector(`#${DIALOG_ID} [data-role="edit-status"]`); if (status) status.textContent = message;
   }
+  function setEditDirty(isDirty) {
+    editDirty = Boolean(isDirty);
+    const saveButton = document.querySelector(`#${DIALOG_ID} [data-action="save-edit"]`);
+    if (saveButton) saveButton.dataset.dirty = String(editDirty);
+  }
   function setBusy(isBusy) {
     document.querySelectorAll(`#${DIALOG_ID} button`).forEach((button) => { button.disabled = isBusy; });
     if (!isBusy) syncKeyPicker();
@@ -1859,12 +1926,24 @@
   function startMountWatcher() {
     patchHistoryRouting();
     cleanupLegacyPriceParam();
-    scheduleRouteScans();
     new MutationObserver((mutations) => {
       if (isTargetRoute() && mutations.some(isUsefulMutation)) schedulePanel();
     }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+    scheduleRouteScans();
     window.addEventListener("popstate", handleRouteChange);
     window.addEventListener("hashchange", handleRouteChange);
+    window.addEventListener("load", scheduleRouteScans, { once: true });
+    document.addEventListener("click", handleMarketplaceTabActivation, true);
+    document.addEventListener("keydown", handleMarketplaceTabActivation, true);
+  }
+
+  function handleMarketplaceTabActivation(event) {
+    if (!location.pathname.startsWith("/marketplace")) return;
+    if (event.type === "keydown" && !["Enter", " ", "Spacebar"].includes(event.key)) return;
+    const tab = event.target?.closest?.("[role='tab'], [data-slot='tabs-trigger']");
+    if (!tab || !/渠道广场|channel/i.test(String(tab.textContent || ""))) return;
+    setTimeout(schedulePanel, 0);
+    setTimeout(schedulePanel, 120);
   }
 
   function patchHistoryRouting() {
@@ -1947,6 +2026,10 @@
       readRequestBodyText,
       withMarketplaceModelPricingFields,
       rememberModelProviderPricesFromPayload,
+      isTargetRoute,
+      isRequestsConsumerRoute,
+      findRequestsApiKeyFilterButton,
+      insertRequestTriggers,
       channelLabel,
       loadMissingChannelNames: testLoadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
