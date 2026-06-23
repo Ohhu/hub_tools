@@ -837,11 +837,13 @@
     if (!anchor) return;
     let field = document.getElementById(PRICE_FIELD_ID);
     if (!field) field = createPriceFilterField();
-    if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
-      anchor.insertAdjacentElement("afterend", field);
-    }
     cleanupMarketplaceSearchInput();
     syncPriceFilterField(field);
+    if (anchors.sort) {
+      if (field.parentElement !== anchor) anchor.appendChild(field);
+    } else if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
+      anchor.insertAdjacentElement("afterend", field);
+    }
     alignPriceFilterWithSort(anchors.sort, field);
   }
 
@@ -904,8 +906,7 @@
     const field = document.createElement("div");
     field.id = PRICE_FIELD_ID;
     field.dataset.hubToolPriceFilter = "true";
-    field.className = "hkb-price-field";
-    field.innerHTML = `<p class="hkb-price-label">价格</p><button type="button" class="hkb-price-button border-input flex items-center justify-center gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]" data-size="default" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
+    field.innerHTML = `<button type="button" class="hkb-price-button border-input flex items-center justify-center gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]" data-size="default" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
     field.addEventListener("click", handlePriceFilterClick);
     return field;
   }
@@ -1301,9 +1302,8 @@
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
       .hkb-sort-anchor{position:relative}
-      #${PRICE_FIELD_ID}{box-sizing:border-box;display:block;height:56px;min-width:0;margin-bottom:var(--hkb-price-bottom,0px)}
-      #${PRICE_FIELD_ID} .hkb-price-label{height:16px;margin:0 0 4px;color:var(--muted-foreground,hsl(25 5.3% 44.7%));font-size:12px;font-weight:500;line-height:16px;letter-spacing:.025em}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;max-width:220px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:var(--radius-md,calc(var(--radius,.625rem) - 2px));background:transparent;color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;text-align:center;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+      #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:calc(100% + 12px);bottom:var(--hkb-price-bottom,0px);display:flex;align-items:center;height:36px}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:12px;background:color-mix(in oklab,var(--input,hsl(20 5.9% 90%)) 12%,transparent);color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
       #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}
       #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:var(--ring,var(--foreground,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--foreground,hsl(20 14.3% 4.1%))) 24%,transparent)}
