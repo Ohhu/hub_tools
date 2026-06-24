@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.3.2
+// @version      0.3.3
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -828,23 +828,23 @@
       document.getElementById(PRICE_FIELD_ID)?.remove();
       return;
     }
-    if (!isMarketplaceChannelsTabActive()) {
+    const anchors = findMarketplaceFilterFields();
+    if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
       document.getElementById(PRICE_FIELD_ID)?.remove();
       return;
     }
-    const anchors = findMarketplaceFilterFields();
     const anchor = anchors.sort || anchors.tags;
     if (!anchor) return;
     let field = document.getElementById(PRICE_FIELD_ID);
     if (!field) field = createPriceFilterField();
-    cleanupMarketplaceSearchInput();
-    syncPriceFilterField(field);
-    if (anchors.sort) {
-      if (field.parentElement !== anchor) anchor.appendChild(field);
-    } else if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
+    if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
       anchor.insertAdjacentElement("afterend", field);
     }
-    alignPriceFilterWithSort(anchors.sort, field);
+    field.parentElement?.classList?.add?.("hkb-price-filter-row");
+    alignPriceFilterWithSort(anchor, field);
+    cleanupMarketplaceSearchInput();
+    syncPriceFilterField(field);
+    alignPriceFilterWithSort(anchor, field);
   }
 
   function isMarketplaceChannelsTabActive() {
@@ -897,9 +897,14 @@
   function alignPriceFilterWithSort(anchor, field) {
     if (!anchor || !field) return;
     anchor.classList?.add?.("hkb-sort-anchor");
-    const trigger = anchor.querySelector?.('[role="combobox"], button');
-    const marginBottom = Number.parseFloat(getComputedStyle(trigger || anchor).marginBottom || "0");
-    field.style.setProperty("--hkb-price-bottom", `${Number.isFinite(marginBottom) ? marginBottom : 0}px`);
+    const parent = field.parentElement;
+    const trigger = anchor.querySelector?.('[role="combobox"], button') || anchor;
+    const parentRect = parent?.getBoundingClientRect?.();
+    const anchorRect = anchor.getBoundingClientRect?.();
+    const triggerRect = trigger.getBoundingClientRect?.();
+    if (!parentRect || !anchorRect || !triggerRect) return;
+    field.style.setProperty("--hkb-price-left", `${Math.max(0, anchorRect.right - parentRect.left + 12)}px`);
+    field.style.setProperty("--hkb-price-top", `${Math.max(0, triggerRect.top - parentRect.top)}px`);
   }
 
   function createPriceFilterField() {
@@ -1302,7 +1307,8 @@
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
     style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
       .hkb-sort-anchor{position:relative}
-      #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:calc(100% + 12px);bottom:var(--hkb-price-bottom,0px);display:flex;align-items:center;height:36px}
+      .hkb-price-filter-row{position:relative;overflow:visible}
+      #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:var(--hkb-price-left,calc(100% + 12px));top:var(--hkb-price-top,0px);z-index:1;display:flex;align-items:center;height:36px}
       #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:12px;background:color-mix(in oklab,var(--input,hsl(20 5.9% 90%)) 12%,transparent);color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
       #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}

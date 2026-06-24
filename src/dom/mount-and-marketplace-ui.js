@@ -101,23 +101,23 @@
       document.getElementById(PRICE_FIELD_ID)?.remove();
       return;
     }
-    if (!isMarketplaceChannelsTabActive()) {
+    const anchors = findMarketplaceFilterFields();
+    if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
       document.getElementById(PRICE_FIELD_ID)?.remove();
       return;
     }
-    const anchors = findMarketplaceFilterFields();
     const anchor = anchors.sort || anchors.tags;
     if (!anchor) return;
     let field = document.getElementById(PRICE_FIELD_ID);
     if (!field) field = createPriceFilterField();
-    cleanupMarketplaceSearchInput();
-    syncPriceFilterField(field);
-    if (anchors.sort) {
-      if (field.parentElement !== anchor) anchor.appendChild(field);
-    } else if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
+    if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
       anchor.insertAdjacentElement("afterend", field);
     }
-    alignPriceFilterWithSort(anchors.sort, field);
+    field.parentElement?.classList?.add?.("hkb-price-filter-row");
+    alignPriceFilterWithSort(anchor, field);
+    cleanupMarketplaceSearchInput();
+    syncPriceFilterField(field);
+    alignPriceFilterWithSort(anchor, field);
   }
 
   function isMarketplaceChannelsTabActive() {
@@ -170,9 +170,14 @@
   function alignPriceFilterWithSort(anchor, field) {
     if (!anchor || !field) return;
     anchor.classList?.add?.("hkb-sort-anchor");
-    const trigger = anchor.querySelector?.('[role="combobox"], button');
-    const marginBottom = Number.parseFloat(getComputedStyle(trigger || anchor).marginBottom || "0");
-    field.style.setProperty("--hkb-price-bottom", `${Number.isFinite(marginBottom) ? marginBottom : 0}px`);
+    const parent = field.parentElement;
+    const trigger = anchor.querySelector?.('[role="combobox"], button') || anchor;
+    const parentRect = parent?.getBoundingClientRect?.();
+    const anchorRect = anchor.getBoundingClientRect?.();
+    const triggerRect = trigger.getBoundingClientRect?.();
+    if (!parentRect || !anchorRect || !triggerRect) return;
+    field.style.setProperty("--hkb-price-left", `${Math.max(0, anchorRect.right - parentRect.left + 12)}px`);
+    field.style.setProperty("--hkb-price-top", `${Math.max(0, triggerRect.top - parentRect.top)}px`);
   }
 
   function createPriceFilterField() {
