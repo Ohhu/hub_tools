@@ -30,6 +30,7 @@
   let editChannelIDs = [];
   let editLoadToken = 0;
   let editDirty = false;
+  let editDragState = null;
   let lastPathname = location.pathname;
 
   const queries = {

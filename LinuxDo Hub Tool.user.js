@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.3.3
+// @version      0.3.4
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -46,6 +46,7 @@
   let editChannelIDs = [];
   let editLoadToken = 0;
   let editDirty = false;
+  let editDragState = null;
   let lastPathname = location.pathname;
 
   const queries = {
@@ -1320,7 +1321,7 @@
       html.dark #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:var(--primary);background:var(--primary);color:var(--primary-foreground)}
       [data-hub-tool-price-hidden="true"]{display:none!important}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgb(0 0 0 / .48);padding:16px;color:var(--foreground,#111827);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
-      #${DIALOG_ID} .hkb-card{width:min(460px,100%);height:388px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
+      #${DIALOG_ID} .hkb-card{width:min(420px,100%);height:388px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
       #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--muted-foreground,#9ca3af);font-size:15px;font-weight:650;padding:0 18px 11px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:var(--foreground,#4b5563)}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:var(--foreground,#111827);border-bottom-color:var(--primary,var(--foreground,#111827))}
       #${DIALOG_ID} [data-view-panel]{height:100%;display:grid;grid-template-rows:auto 1fr auto}
@@ -1345,15 +1346,15 @@
       #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
       #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
-      #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 14%,transparent);padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:var(--border,#cbd5e1) transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:var(--border,#cbd5e1)}
-      #${DIALOG_ID} .hkb-channel-row{min-height:36px;display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:8px;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-index{width:22px;flex-shrink:0;color:var(--muted-foreground,#64748b);font-size:12px;font-variant-numeric:tabular-nums;text-align:center}#${DIALOG_ID} .hkb-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-channel-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}#${DIALOG_ID} .hkb-row-btn{width:26px;height:26px;min-height:26px;border-color:transparent}#${DIALOG_ID} .hkb-row-btn svg{width:14px;height:14px}#${DIALOG_ID} .hkb-remove{color:var(--muted-foreground,#6b7280)}#${DIALOG_ID} .hkb-remove:hover{color:var(--destructive,#dc2626)}
+      #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 14%,transparent);padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s;touch-action:none;user-select:none}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:var(--border,#cbd5e1) transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:var(--border,#cbd5e1)}
+      #${DIALOG_ID} .hkb-channel-list-stage{position:relative;min-height:36px}#${DIALOG_ID} .hkb-channel-slot{position:absolute;left:0;right:0;transition:top .12s ease}#${DIALOG_ID} .hkb-channel-placeholder{position:absolute;left:0;right:0;border:1px dashed var(--primary,var(--foreground,#111827));border-radius:8px;background:color-mix(in oklab,var(--primary,var(--foreground,#111827)) 8%,transparent)}#${DIALOG_ID} .hkb-channel-row{height:36px;box-sizing:border-box;display:flex;align-items:center;gap:6px;padding:4px 6px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-row.is-dragging{border-color:var(--primary,var(--foreground,#111827));background:var(--card,#fff);box-shadow:0 8px 18px -14px rgb(15 23 42 / .65);pointer-events:none}#${DIALOG_ID} .hkb-channel-index{width:22px;flex-shrink:0;color:var(--muted-foreground,#64748b);font-size:12px;font-variant-numeric:tabular-nums;text-align:center}#${DIALOG_ID} .hkb-drag-handle{width:22px;height:26px;min-height:26px;border:0;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:grab;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;font:inherit;line-height:1;letter-spacing:1px}#${DIALOG_ID} .hkb-drag-handle:active{cursor:grabbing}#${DIALOG_ID} .hkb-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-channel-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}#${DIALOG_ID} .hkb-row-btn{width:26px;height:26px;min-height:26px;border-color:transparent}#${DIALOG_ID} .hkb-row-btn svg{width:14px;height:14px}#${DIALOG_ID} .hkb-remove{color:var(--muted-foreground,#6b7280)}#${DIALOG_ID} .hkb-remove:hover{color:var(--destructive,#dc2626)}
       #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:var(--muted-foreground,#9ca3af);font-size:13px}
       #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid var(--border,#f3f4f6)}
       #${DIALOG_ID} .hkb-edit-actions{border-top:none;padding-top:18px}
       #${DIALOG_ID} [data-action="save-edit"]{position:relative}
       #${DIALOG_ID} [data-action="save-edit"][data-dirty="true"]::after{content:"";position:absolute;right:-3px;top:-3px;width:7px;height:7px;border-radius:999px;background:var(--primary,#111827);box-shadow:0 0 0 2px var(--card,#fff)}
       #${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{display:flex;align-items:center;gap:8px}
-      #${DIALOG_ID} .hkb-status{color:var(--muted-foreground,#6b7280);font-size:12px;line-height:16px;flex:1;min-width:0}
+      #${DIALOG_ID} .hkb-status{color:var(--muted-foreground,#6b7280);font-size:12px;line-height:16px;flex:1;min-width:0;text-align:center}
       #${DIALOG_ID} button:not(.hkb-icon-btn){box-sizing:border-box;height:36px;min-height:36px;line-height:20px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}
       #${DIALOG_ID} .hkb-primary{border-color:var(--primary,#111827);background:var(--primary,#111827);color:var(--primary-foreground,#f9fafb)}#${DIALOG_ID} .hkb-primary:hover{background:color-mix(in oklab,var(--primary,#111827) 88%,white)}#${DIALOG_ID} .hkb-secondary{border-color:var(--border,#d1d5db);background:var(--secondary,#f3f4f6);color:var(--secondary-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-secondary:hover{background:var(--accent,#e5e7eb);color:var(--accent-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-ghost{border-color:transparent;background:transparent;color:var(--muted-foreground,#374151)}#${DIALOG_ID} .hkb-ghost:hover{background:var(--accent,#f9fafb);color:var(--accent-foreground,var(--foreground,#374151))}
       @media (max-width:360px){#${DIALOG_ID}{padding:8px}#${DIALOG_ID} .hkb-card{height:min(388px,calc(100vh - 16px));padding:16px}#${DIALOG_ID} .hkb-edit-row{grid-template-columns:1fr;gap:6px}#${DIALOG_ID} .hkb-edit-row-list .hkb-label{padding-top:0}#${DIALOG_ID} .hkb-actions{flex-wrap:wrap;align-items:flex-start}#${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{flex-wrap:wrap}#${DIALOG_ID} .hkb-status{flex-basis:100%;order:3}}
@@ -1404,6 +1405,7 @@
       removeEditChannel(actionEl.dataset.channelId || "");
       return;
     }
+    if (action === "edit-drag-channel") return;
     if (action === "edit-move-channel") {
       moveEditChannel(actionEl.dataset.channelId || "", actionEl.dataset.direction || "down");
       return;
@@ -1468,13 +1470,13 @@
         <div class="hkb-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="append-bind" data-action-panel="update">追加绑定</button><button type="button" class="hkb-secondary" data-action="replace-bind" data-action-panel="update">替换绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button></div><div class="hkb-status" data-role="status"></div><div class="hkb-action-right"><button type="button" class="hkb-ghost" data-action="close">关闭</button></div></div>
       </div>
       <div class="hkb-main" data-view-panel="edit" hidden>
-        <div class="hkb-edit-title"><button type="button" class="hkb-icon-btn hkb-back" data-action="close-edit" title="返回" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span>编辑绑定渠道</span></div>
+        <div class="hkb-edit-title"><span>编辑绑定渠道</span></div>
         <div class="hkb-edit-body">
           <div class="hkb-edit-row"><span class="hkb-label">API Key</span><div class="hkb-key-picker" data-role="edit-key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="edit-key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="edit-key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="edit-key-menu" role="listbox" hidden></ul></div></div>
           <div class="hkb-edit-row"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="edit-channel-label"></div></div>
-          <div class="hkb-edit-row hkb-edit-row-list"><span class="hkb-label">已绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
+          <div class="hkb-edit-row hkb-edit-row-list"><span class="hkb-label">绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
         </div>
-        <div class="hkb-actions hkb-edit-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="edit-add-current">添加当前渠道</button></div><div class="hkb-status" data-role="edit-status"></div><div class="hkb-action-right"><button type="button" class="hkb-secondary" data-action="save-edit">保存修改</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
+        <div class="hkb-actions hkb-edit-actions"><div class="hkb-action-left"><button type="button" class="hkb-secondary" data-action="edit-add-current">添加</button></div><div class="hkb-status" data-role="edit-status"></div><div class="hkb-action-right"><button type="button" class="hkb-primary" data-action="save-edit">保存</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
       </div>
     </div>`;
     dialog.addEventListener("click", (event) => {
@@ -1490,6 +1492,10 @@
         setStatus("");
       }
     });
+    dialog.addEventListener("pointerdown", handleEditChannelDragStart);
+    dialog.addEventListener("pointermove", handleEditChannelDragMove);
+    dialog.addEventListener("pointerup", handleEditChannelDragEnd);
+    dialog.addEventListener("pointercancel", cancelEditChannelDrag);
     dialog.addEventListener("scroll", (event) => {
       if (event.target?.dataset?.role === "edit-channel-list") markScrolling(event.target);
     }, true);
@@ -1768,18 +1774,98 @@
     setEditStatus("已移除");
   }
 
+  const EDIT_CHANNEL_ROW_STEP = 40;
+
+  function clampEditChannelIndex(index) {
+    return Math.max(0, Math.min(editChannelIDs.length - 1, index));
+  }
+
+  function moveChannelIDToIndex(channelIDs, channelID, targetIndex) {
+    const numericID = extractNumericChannelID(channelID);
+    const currentIndex = channelIDs.indexOf(numericID);
+    const nextIndex = Math.max(0, Math.min(channelIDs.length - 1, Number(targetIndex) || 0));
+    if (!numericID || currentIndex < 0 || currentIndex === nextIndex) return channelIDs;
+    const nextIDs = [...channelIDs];
+    const [item] = nextIDs.splice(currentIndex, 1);
+    nextIDs.splice(nextIndex, 0, item);
+    return nextIDs;
+  }
+
   function moveEditChannel(channelID, direction) {
     const numericID = extractNumericChannelID(channelID);
     const currentIndex = editChannelIDs.indexOf(numericID);
     const offset = direction === "up" ? -1 : 1;
     const nextIndex = currentIndex + offset;
     if (!numericID || currentIndex < 0 || nextIndex < 0 || nextIndex >= editChannelIDs.length) return;
-    const nextIDs = [...editChannelIDs];
-    [nextIDs[currentIndex], nextIDs[nextIndex]] = [nextIDs[nextIndex], nextIDs[currentIndex]];
-    editChannelIDs = nextIDs;
+    editChannelIDs = moveChannelIDToIndex(editChannelIDs, numericID, nextIndex);
     renderEditChannelList();
     setEditDirty(true);
     setEditStatus("已调整");
+  }
+
+  function handleEditChannelDragStart(event) {
+    const handle = event.target?.closest?.('[data-action="edit-drag-channel"]');
+    if (!handle) return;
+    const numericID = extractNumericChannelID(handle.dataset.channelId || "");
+    const currentIndex = editChannelIDs.indexOf(numericID);
+    const list = handle.closest?.('[data-role="edit-channel-list"]');
+    if (!numericID || currentIndex < 0 || !list) return;
+    const listRect = list.getBoundingClientRect();
+    const rowRect = handle.closest?.(".hkb-channel-row")?.getBoundingClientRect?.();
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    editDragState = {
+      channelID: numericID,
+      pointerID: event.pointerId,
+      pointerY: event.clientY,
+      listTop: listRect.top,
+      scrollTop: list.scrollTop || 0,
+      grabOffsetY: event.clientY - (rowRect?.top || (listRect.top + currentIndex * EDIT_CHANNEL_ROW_STEP)),
+      targetIndex: currentIndex,
+    };
+    renderEditChannelList();
+    setEditStatus("");
+  }
+
+  function handleEditChannelDragMove(event) {
+    if (!editDragState || editDragState.pointerID !== event.pointerId) return;
+    const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
+    if (!list || !editChannelIDs.length) return;
+    const listRect = list.getBoundingClientRect();
+    const edge = 34;
+    if (event.clientY - listRect.top < edge) list.scrollTop = Math.max(0, (list.scrollTop || 0) - 4.3);
+    else if (listRect.bottom - event.clientY < edge) list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + 4.3);
+    const scrollTop = list.scrollTop || 0;
+    const contentY = event.clientY - listRect.top + scrollTop;
+    editDragState = {
+      ...editDragState,
+      pointerY: event.clientY,
+      listTop: listRect.top,
+      scrollTop,
+      targetIndex: clampEditChannelIndex(Math.floor(contentY / EDIT_CHANNEL_ROW_STEP)),
+    };
+    event.preventDefault();
+    renderEditChannelList();
+  }
+
+  function handleEditChannelDragEnd(event) {
+    if (!editDragState || editDragState.pointerID !== event.pointerId) return;
+    const nextIDs = moveChannelIDToIndex(editChannelIDs, editDragState.channelID, editDragState.targetIndex);
+    const changed = nextIDs !== editChannelIDs;
+    editChannelIDs = nextIDs;
+    editDragState = null;
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+    renderEditChannelList();
+    if (changed) setEditDirty(true);
+    setEditStatus(changed ? "已调整" : "");
+  }
+
+  function cancelEditChannelDrag(event) {
+    if (!editDragState || (event?.pointerId != null && editDragState.pointerID !== event.pointerId)) return;
+    editDragState = null;
+    renderEditChannelList();
+    setEditStatus("");
   }
 
   async function saveEditBindings() {
@@ -1796,21 +1882,42 @@
   function renderEditChannelList() {
     const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
     if (!list) return;
-    list.innerHTML = editChannelIDs.length
-      ? editChannelIDs.map((id, index) => renderEditChannelRow(id, index)).join("")
-      : `<div class="hkb-empty">暂无绑定渠道</div>`;
+    if (!editChannelIDs.length) {
+      editDragState = null;
+      list.innerHTML = `<div class="hkb-empty">暂无绑定渠道</div>`;
+      return;
+    }
+    list.innerHTML = renderEditChannelStage();
   }
 
-  function renderEditChannelRow(channelID, index) {
+  function renderEditChannelStage() {
+    const dragIndex = editDragState ? editChannelIDs.indexOf(editDragState.channelID) : -1;
+    const dragChannelID = dragIndex >= 0 ? editDragState.channelID : null;
+    const targetIndex = dragChannelID ? clampEditChannelIndex(editDragState.targetIndex) : -1;
+    const visibleIDs = dragChannelID ? editChannelIDs.filter((id) => id !== dragChannelID) : editChannelIDs;
+    const slots = visibleIDs.map((id, visibleIndex) => {
+      const displayIndex = dragChannelID && visibleIndex >= targetIndex ? visibleIndex + 1 : visibleIndex;
+      return `<div class="hkb-channel-slot" style="top:${displayIndex * EDIT_CHANNEL_ROW_STEP}px">${renderEditChannelRow(id, displayIndex)}</div>`;
+    }).join("");
+    const placeholder = dragChannelID
+      ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:36px"></div>`
+      : "";
+    const dragTop = dragChannelID
+      ? Math.max(0, Math.min((editChannelIDs.length - 1) * EDIT_CHANNEL_ROW_STEP, editDragState.pointerY - editDragState.listTop + editDragState.scrollTop - editDragState.grabOffsetY))
+      : 0;
+    const dragging = dragChannelID
+      ? `<div class="hkb-channel-slot" style="top:${dragTop}px;z-index:2;transition:none">${renderEditChannelRow(dragChannelID, targetIndex, { dragging: true })}</div>`
+      : "";
+    return `<div class="hkb-channel-list-stage" style="height:${editChannelIDs.length * EDIT_CHANNEL_ROW_STEP}px">${slots}${placeholder}${dragging}</div>`;
+  }
+
+  function renderEditChannelRow(channelID, index, options = {}) {
     const safeID = escapeHtml(channelID);
-    const isFirst = index === 0;
-    const isLast = index === editChannelIDs.length - 1;
-    return `<div class="hkb-channel-row" data-channel-id="${safeID}">
-      <span class="hkb-channel-index">${index + 1}</span>
+    const rowClass = options.dragging ? "hkb-channel-row is-dragging" : "hkb-channel-row";
+    return `<div class="${rowClass}" data-channel-id="${safeID}">
+      <button type="button" class="hkb-drag-handle" data-action="edit-drag-channel" data-channel-id="${safeID}" title="拖动排序" aria-label="拖动排序">::</button>
       <span class="hkb-channel-name">${escapeHtml(channelLabel(channelID))}</span>
       <span class="hkb-channel-actions">
-        <button type="button" class="hkb-icon-btn hkb-row-btn" data-action="edit-move-channel" data-direction="up" data-channel-id="${safeID}" title="上移" aria-label="上移" ${isFirst ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18 15-6-6-6 6"></path></svg></button>
-        <button type="button" class="hkb-icon-btn hkb-row-btn" data-action="edit-move-channel" data-direction="down" data-channel-id="${safeID}" title="下移" aria-label="下移" ${isLast ? "disabled" : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
         <button type="button" class="hkb-icon-btn hkb-row-btn hkb-remove" data-action="edit-remove-channel" data-channel-id="${safeID}" title="移除" aria-label="移除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button>
       </span>
     </div>`;
@@ -2016,6 +2123,7 @@
       apiKeyValue,
       buildProfilesInput,
       buildProfilesInputWithChannelIDs,
+      moveChannelIDToIndex,
       findMarketplaceFilterFields,
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,

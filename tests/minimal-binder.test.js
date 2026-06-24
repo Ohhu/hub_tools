@@ -179,7 +179,7 @@ assert.equal(source.includes('data-action="append-bind"'), true);
 assert.equal(source.includes('data-action="replace-bind"'), true);
 assert.equal(source.includes(">替换绑定</button>"), true);
 assert.equal(source.includes('data-view-panel="edit"'), true);
-assert.equal(source.includes(".hkb-card{width:min(460px,100%);height:388px"), true);
+assert.equal(source.includes(".hkb-card{width:min(420px,100%);height:388px"), true);
 assert.equal(source.includes("[data-view-panel]{height:100%;display:grid;grid-template-rows:auto 1fr auto}"), true);
 assert.equal(source.includes("button:not(.hkb-icon-btn){box-sizing:border-box;height:36px;min-height:36px;line-height:20px"), true);
 assert.equal(source.includes("hkb-edit-body{display:grid;grid-template-rows:auto auto minmax(0,1fr)"), true);
@@ -188,7 +188,12 @@ assert.equal(source.includes("hkb-edit-actions{border-top:none;padding-top:18px"
 assert.equal(source.includes('data-role="edit-key-picker"'), true);
 assert.equal(source.includes('data-role="edit-key-label"'), true);
 assert.equal(source.includes("hkb-edit-list{height:100%;min-height:92px"), true);
-assert.equal(source.includes("hkb-drag-handle"), false);
+assert.equal(source.includes("hkb-drag-handle"), true);
+assert.equal(source.includes('data-action="edit-drag-channel"'), true);
+assert.equal(source.includes("拖动排序中"), false);
+assert.equal(source.includes('data-action="edit-add-current">添加</button>'), true);
+assert.equal(source.includes('data-action="save-edit">保存</button>'), true);
+assert.equal(source.includes('class="hkb-channel-index"'), false);
 assert.equal(source.includes('draggable="true"'), false);
 assert.equal(source.includes('>⧉</button>'), false);
 assert.equal(source.includes('>↻</button>'), false);
@@ -270,6 +275,10 @@ assert.equal(source.includes("@media (max-width:360px)"), true);
   };
   assert.deepEqual(plain(helpers.buildProfilesInputWithChannelIDs(input, [29812])).profiles[0].channelIDs, [29812]);
 }
+
+assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 29812, 0)), [29812, 5638, 42]);
+assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 5638, 9)), [29812, 42, 5638]);
+assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), [5638, 29812, 42]);
 
 {
   const trigger = new FakeElement({ text: "更新 API 密钥" });

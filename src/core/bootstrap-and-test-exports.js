@@ -85,6 +85,7 @@
       apiKeyValue,
       buildProfilesInput,
       buildProfilesInputWithChannelIDs,
+      moveChannelIDToIndex,
       findMarketplaceFilterFields,
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
