@@ -11,12 +11,15 @@ LinuxDo Hub Tool 是一个用于 LinuxDo Hub 的 Tampermonkey / 油猴脚本。�
 ├── LinuxDo Hub Tool.user.js        # 最终油猴脚本产物
 ├── src/                            # 开发源码片段
 │   ├── userscript-header.js         # 油猴 metadata 头
-│   ├── core/                        # 常量、状态、请求工具、请求拦截、启动逻辑
-│   ├── graphql/                     # GraphQL 查询与统一请求 client
-│   ├── marketplace/                 # 资源市场价格、筛选、分页与 payload 边界
-│   ├── dom/                         # 页面挂载、选择器、市场 UI 与请求页入口
-│   ├── channels/                    # payload 渠道提取与 React 探测边界
-│   └── api-keys/                    # API Key 弹窗与绑定操作
+│   ├── base.js                      # 常量、全局状态、请求体/URL 工具
+│   ├── graphql.js                   # GraphQL 查询、client 与 pricing query 改写
+│   ├── marketplace-pricing.js       # 市场价格判断、免费谓词与价格缓存
+│   ├── marketplace-payload.js       # 市场 payload 过滤、分页扫描与隐式免费行
+│   ├── fetch-patch.js               # 全局 fetch 拦截与响应包装
+│   ├── channel-cache.js             # 渠道缓存、payload 渠道提取与 React 探测
+│   ├── page-integration.js          # 页面挂载、选择器、市场 UI 与请求页入口
+│   ├── api-keys.js                  # API Key 服务、profile 绑定与弹窗 UI
+│   └── bootstrap-and-test-exports.js # 启动逻辑与测试导出
 ├── scripts/
 │   ├── build-userscript.js          # 从 src/ 生成最终 userscript
 │   └── check-userscript.js          # 校验产物是否与 src/ 同步
@@ -67,16 +70,16 @@ node --check scripts/check-userscript.js
 
 项目保持零依赖 userscript 构建方式，源码顺序由 `scripts/build-userscript.js` 中的 `SOURCE_FILES` 定义。顺序本身就是模块边界：
 
-1. `core/constants.js`、`core/state.js` 与 `core/request-utils.js` 基础状态和请求工具
-2. `graphql/` 查询、client 与 pricing query 改写
-3. `marketplace/` 价格判断、缓存、扫描和 payload 转换
-4. `core/fetch-patch.js` 全局请求拦截
-5. `channels/` React 探测与 payload 渠道提取，再加载 `core/channel-cache.js`
-6. `dom/` 选择器、挂载和页面集成
-7. `api-keys/` API Key service、profile binding 与 UI
-8. `core/bootstrap-and-test-exports.js` 启动和测试导出，必须保持最后
+1. `base.js` 常量、全局状态和请求工具
+2. `graphql.js` 查询、client 与 pricing query 改写
+3. `marketplace-pricing.js` 与 `marketplace-payload.js` 价格判断、缓存、扫描和 payload 转换
+4. `fetch-patch.js` 全局请求拦截
+5. `channel-cache.js` 渠道缓存、payload 提取与 React 探测
+6. `page-integration.js` 选择器、挂载和页面集成
+7. `api-keys.js` API Key service、profile binding 与弹窗 UI
+8. `bootstrap-and-test-exports.js` 启动和测试导出，必须保持最后
 
-新增源码片段时应放入对应层级，并确认重新构建后的 `LinuxDo Hub Tool.user.js` 与源码同步。
+新增源码时应放入对应功能域文件，并确认重新构建后的 `LinuxDo Hub Tool.user.js` 与源码同步。
 
 ## 发布产物
 

@@ -8,36 +8,15 @@ const OUTPUT_FILE = path.join(ROOT, "LinuxDo Hub Tool.user.js");
 // Keep foundational constants/state/helpers before feature modules, and keep
 // bootstrap/test exports last so all runtime helpers are available.
 const SOURCE_FILES = [
-  "src/core/constants.js",
-  "src/core/state.js",
-  "src/core/request-utils.js",
-  "src/graphql/queries.js",
-  "src/graphql/client.js",
-  "src/graphql/pricing-fields.js",
-  "src/marketplace/pricing.js",
-  "src/marketplace/price-predicates.js",
-  "src/marketplace/model-price-cache.js",
-  "src/marketplace/payload-filter.js",
-  "src/marketplace/channel-scan.js",
-  "src/marketplace/payload-augment.js",
-  "src/core/fetch-patch.js",
-  "src/channels/react-channel-probe.js",
-  "src/channels/payload-channel-extract.js",
-  "src/core/channel-cache.js",
-  "src/dom/selectors.js",
-  "src/dom/select-like-user.js",
-  "src/dom/mount-and-marketplace-ui.js",
-  "src/dom/marketplace-filter-ui.js",
-  "src/dom/request-triggers.js",
-  "src/dom/panel-mount.js",
-  "src/dom/route-watcher.js",
-  "src/api-keys/profile-binding.js",
-  "src/api-keys/api-key-service.js",
-  "src/api-keys/key-picker-ui.js",
-  "src/api-keys/edit-channel-list.js",
-  "src/api-keys/operations.js",
-  "src/api-keys/dialog-ui.js",
-  "src/core/bootstrap-and-test-exports.js",
+  "src/base.js",
+  "src/graphql.js",
+  "src/marketplace-pricing.js",
+  "src/marketplace-payload.js",
+  "src/fetch-patch.js",
+  "src/channel-cache.js",
+  "src/page-integration.js",
+  "src/api-keys.js",
+  "src/bootstrap-and-test-exports.js",
 ];
 
 function assertValidSourceFiles() {
@@ -63,12 +42,11 @@ function assertValidSourceFiles() {
     throw new Error(`Invalid userscript build source list (${details.join("; ")})`);
   }
 
-  assertSourceOrder("src/core/constants.js", "src/core/state.js");
-  assertSourceOrder("src/core/state.js", "src/core/channel-cache.js");
-  assertSourceOrder("src/marketplace/pricing.js", "src/core/fetch-patch.js");
-  assertSourceOrder("src/marketplace/payload-filter.js", "src/marketplace/channel-scan.js");
-  assertSourceOrder("src/graphql/pricing-fields.js", "src/core/fetch-patch.js");
-  assertLastSourceFile("src/core/bootstrap-and-test-exports.js");
+  assertSourceOrder("src/base.js", "src/graphql.js");
+  assertSourceOrder("src/marketplace-pricing.js", "src/fetch-patch.js");
+  assertSourceOrder("src/marketplace-payload.js", "src/fetch-patch.js");
+  assertSourceOrder("src/channel-cache.js", "src/page-integration.js");
+  assertLastSourceFile("src/bootstrap-and-test-exports.js");
 }
 
 function listJavaScriptFiles(directory) {

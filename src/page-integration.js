@@ -1,0 +1,503 @@
+const MARKETPLACE_CHANNEL_TAB_RE = /渠道广场|channel/i;
+const MARKETPLACE_CHANNELS_ROOT_RE = /渠道广场|按渠道名称|全部标签/i;
+const MARKETPLACE_TAGS_LABEL_RE = /^(标签|tags?)$/i;
+const MARKETPLACE_SORT_LABEL_RE = /^(排序|sort)$/i;
+const MARKETPLACE_HEALTH_LABEL_RE = /^(健康序列|health(?:\s+window|\s+sequence)?)$/i;
+const MARKETPLACE_VERIFICATION_ACTION_RE = /^(真伪核验|Authenticity\s+Check|Verify\s+Authenticity)$/i;
+const MARKETPLACE_SEARCH_PLACEHOLDER_RE = /渠道名称|支持模型|search/i;
+const REQUESTS_API_KEY_LABEL = "API密钥";
+const MARKETPLACE_FREE_SORT_TEXT = "倍率从低到高";
+const MARKETPLACE_DEFAULT_SORT_TEXT = "综合推荐";
+
+function openSelectLikeUser(trigger) {
+  dispatchPointerEvent(trigger, "pointerdown", 1);
+}
+
+function selectOptionLikeUser(option) {
+  dispatchPointerEvent(option, "pointermove", 1);
+  dispatchMouseEvent(option, "mousemove", 1);
+  dispatchPointerEvent(option, "pointerup", 0);
+  dispatchMouseEvent(option, "mouseup", 0);
+  dispatchMouseEvent(option, "click", 0);
+}
+
+function dispatchPointerEvent(element, type, buttons) {
+  const init = mouseEventInit(element, buttons);
+  const event = typeof PointerEvent === "function"
+    ? new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true })
+    : new MouseEvent(type, init);
+  element.dispatchEvent(event);
+}
+
+function dispatchMouseEvent(element, type, buttons) {
+  element.dispatchEvent(new MouseEvent(type, mouseEventInit(element, buttons)));
+}
+
+function mouseEventInit(element, buttons) {
+  const rect = element.getBoundingClientRect?.();
+  const clientX = rect ? rect.left + rect.width / 2 : 0;
+  const clientY = rect ? rect.top + rect.height / 2 : 0;
+  return {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    button: 0,
+    buttons,
+    clientX,
+    clientY,
+  };
+}
+
+function findApiKeyActionButtons() {
+  return Array.from(document.querySelectorAll("main button")).filter(isApiKeyActionButton);
+}
+
+function findChannelActionButtons() {
+  return Array.from(document.querySelectorAll("main button")).filter((button) =>
+    isApiKeyActionButton(button) || isTriggerButton(button),
+  );
+}
+
+function isApiKeyActionButton(node) {
+  return !isTriggerButton(node) && isApiKeyActionButtonText(node.textContent || "");
+}
+
+function isApiKeyActionButtonText(text) {
+  const normalizedText = cleanText(text);
+  return API_KEY_CREATE_ACTION_RE.test(normalizedText) || API_KEY_EXISTING_ACTION_RE.test(normalizedText);
+}
+
+function isExistingApiKeyActionButtonText(text) {
+  return API_KEY_EXISTING_ACTION_RE.test(cleanText(text));
+}
+
+function isTriggerButton(node) {
+  return Boolean(node?.classList?.contains(TRIGGER_CLASS));
+}
+
+function selectPreferredApiKeyActionButton(buttons) {
+  return buttons.find((button) => isExistingApiKeyActionButtonText(button.textContent || "")) || buttons[0] || null;
+}
+
+function replaceApiKeyActionButtons() {
+  const buttonsByContext = new Map();
+  for (const button of findApiKeyActionButtons()) {
+    const context = findChannelContext(button);
+    if (!context) continue;
+    const contextButtons = buttonsByContext.get(context) || [];
+    contextButtons.push(button);
+    buttonsByContext.set(context, contextButtons);
+  }
+
+  for (const [context, buttons] of buttonsByContext) {
+    const existingTrigger = context.querySelector?.(`.${TRIGGER_CLASS}`);
+    if (existingTrigger) {
+      buttons.forEach((button) => button.remove?.());
+      moveChannelTriggerToActionEnd(existingTrigger);
+      continue;
+    }
+
+    const anchor = selectPreferredApiKeyActionButton(buttons);
+    if (!anchor) continue;
+    const channel = findChannelFromButton(anchor);
+    if (!channel.id) continue;
+
+    buttons.forEach((button) => {
+      if (button !== anchor) button.remove?.();
+    });
+    replaceApiKeyActionButton(anchor, channel);
+  }
+}
+
+function removeMarketplaceVerificationButtons() {
+  if (!location.pathname.startsWith("/marketplace")) return;
+  for (const button of document.querySelectorAll("main button")) {
+    if (isMarketplaceVerificationButtonText(button.textContent || "")) button.remove?.();
+  }
+}
+
+function isMarketplaceVerificationButtonText(text) {
+  return MARKETPLACE_VERIFICATION_ACTION_RE.test(cleanText(text));
+}
+
+function replaceApiKeyActionButton(anchor, channel = findChannelFromButton(anchor)) {
+  if (!channel.id) return;
+  const trigger = createTrigger(channel);
+  anchor.replaceWith(trigger);
+  moveChannelTriggerToActionEnd(trigger);
+}
+
+function moveChannelTriggerToActionEnd(trigger) {
+  const actionContainer = trigger?.parentElement;
+  if (!actionContainer || actionContainer.lastElementChild === trigger) return;
+  actionContainer.append(trigger);
+}
+
+function createTrigger(channel) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${TRIGGER_CLASS} ${CHANNEL_TRIGGER_CLASS}`;
+  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"></circle><path d="m11 12 9-9"></path><path d="m16 4 4 4"></path></svg><span>更新 API 密钥</span>`;
+  button.setAttribute("aria-label", `更新 ${channel.name || "当前渠道"} 的 API 密钥`);
+  updateTriggerChannel(button, channel);
+  button.addEventListener("click", openDialog);
+  return button;
+}
+
+function findChannelContext(node) {
+  const fixed = node.closest('[data-slot="card"], tr, [role="row"]');
+  if (fixed) return fixed;
+  let current = node.parentElement;
+  while (current && current !== document.body) {
+    if (findChannelNameFromText(textBeforeButton(current, node))) return current;
+    current = current.parentElement;
+  }
+  return node.parentElement;
+}
+
+function findCardChannelName(node) {
+  return node.closest('[data-slot="card"]')?.querySelector('[data-slot="card-title"]')?.textContent?.trim() || "";
+}
+
+function findChannelFromButton(node) {
+  const name = findVisibleChannelName(node);
+  const channel = findCachedChannel(name) || findDirectReactChannel(node) || {};
+  return {
+    id: channel.id ? String(channel.id) : "",
+    name: channel.name || name,
+  };
+}
+
+function findVisibleChannelName(node) {
+  const context = findChannelContext(node);
+  return findCardChannelName(node) || findChannelNameFromText(context ? textBeforeButton(context, node) : "");
+}
+
+function textBeforeButton(context, button) {
+  const text = [];
+  for (const current of Array.from(context.childNodes || context.children || [])) {
+    if (current === button || containsNode(current, button)) break;
+    const value = current.textContent?.trim();
+    if (value) text.push(value);
+  }
+  return text.join("\n");
+}
+
+function containsNode(parent, child) {
+  if (parent?.contains) return parent.contains(child);
+  let current = child?.parentElement;
+  while (current) {
+    if (current === parent) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function findChannelNameFromText(text) {
+  const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const channel = findCachedChannel(line);
+    if (channel) return channel.name;
+  }
+  return "";
+}
+
+function insertPriceFilter() {
+  if (!location.pathname.startsWith("/marketplace")) {
+    resetPriceFilterState();
+    removePriceFilterField();
+    return;
+  }
+  const anchors = findMarketplaceFilterFields();
+  if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
+    removePriceFilterField();
+    return;
+  }
+  const filterAnchor = anchors.health || anchors.sort || anchors.tags;
+  if (!filterAnchor) return;
+  let field = document.getElementById(PRICE_FIELD_ID);
+  if (!field) field = createPriceFilterField();
+  const previousParent = field.parentElement;
+  const filterGrid = movePriceFilterToEndOfGrid(filterAnchor, field);
+  if (!filterGrid) return;
+  if (previousParent && previousParent !== filterGrid) {
+    previousParent.classList?.remove?.("hkb-marketplace-filter-grid");
+  }
+  markMarketplaceFilterGrid(filterGrid);
+  cleanupMarketplaceSearchInput();
+  syncPriceFilterField(field);
+}
+
+function movePriceFilterToEndOfGrid(filterAnchor, priceFilterField) {
+  const filterGrid = filterAnchor?.parentElement;
+  if (!filterGrid) return null;
+  if (priceFilterField.parentElement !== filterGrid || filterGrid.lastElementChild !== priceFilterField) {
+    filterGrid.append(priceFilterField);
+  }
+  return filterGrid;
+}
+
+function removePriceFilterField() {
+  const field = document.getElementById(PRICE_FIELD_ID);
+  const parent = field?.parentElement;
+  field?.remove?.();
+  parent?.classList?.remove?.("hkb-marketplace-filter-grid");
+  document.querySelectorAll?.(".hkb-marketplace-filter-grid")?.forEach?.((grid) => {
+    grid.classList?.remove?.("hkb-marketplace-filter-grid");
+  });
+}
+
+function markMarketplaceFilterGrid(activeGrid) {
+  document.querySelectorAll?.(".hkb-marketplace-filter-grid")?.forEach?.((grid) => {
+    if (grid !== activeGrid) grid.classList?.remove?.("hkb-marketplace-filter-grid");
+  });
+  activeGrid?.classList?.add?.("hkb-marketplace-filter-grid");
+}
+
+function isMarketplaceChannelsTabActive() {
+  if (!location.pathname.startsWith("/marketplace")) return false;
+  const root = document.querySelector("main") || document;
+  const selected = root.querySelector('[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]');
+  return !selected || MARKETPLACE_CHANNEL_TAB_RE.test(String(selected.textContent || ""));
+}
+
+function findMarketplaceFilterFields(fields = Array.from(marketplaceChannelsRoot().querySelectorAll("label, p, div, span"))) {
+  return {
+    tags: filterFieldByLabel(fields, MARKETPLACE_TAGS_LABEL_RE),
+    sort: filterFieldByLabel(fields, MARKETPLACE_SORT_LABEL_RE),
+    health: filterFieldByLabel(fields, MARKETPLACE_HEALTH_LABEL_RE),
+  };
+}
+
+function marketplaceChannelsRoot() {
+  const main = document.querySelector("main") || document;
+  const panels = Array.from(main.querySelectorAll?.('[role="tabpanel"], [data-slot="tabs-content"]') || []);
+  return panels.find((panel) => isElementVisible(panel) && MARKETPLACE_CHANNELS_ROOT_RE.test(String(panel.textContent || ""))) || main;
+}
+
+function filterFieldByLabel(elements, pattern) {
+  for (const label of elements) {
+    if (!isFilterLabelText(label.textContent, pattern)) continue;
+    const field = closestFilterField(label);
+    if (hasFilterControl(field)) return field;
+  }
+  return null;
+}
+
+function isFilterLabelText(text, pattern) {
+  const normalized = cleanText(text);
+  return normalized.length <= 24 && pattern.test(normalized);
+}
+
+function closestFilterField(label) {
+  let current = label;
+  while (current && current !== document.body) {
+    if (hasFilterControl(current)) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function hasFilterControl(field) {
+  return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
+}
+
+function createPriceFilterField() {
+  const field = document.createElement("div");
+  field.id = PRICE_FIELD_ID;
+  field.className = "space-y-1";
+  field.dataset.hubToolPriceFilter = "true";
+  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">价格</p>
+    <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
+  field.addEventListener("click", handlePriceFilterClick);
+  return field;
+}
+
+function syncPriceFilterField(field) {
+  if (!field) return;
+  const price = currentPriceFilter();
+  field.querySelectorAll("[data-price]").forEach((button) => {
+    const selected = button.dataset.price === price;
+    button.setAttribute("aria-pressed", String(selected));
+  });
+}
+
+function handlePriceFilterClick(event) {
+  const button = event.target?.closest?.("[data-price]");
+  if (!button) return;
+  setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
+}
+
+function setPriceFilter(value) {
+  const price = normalizePriceFilter(value);
+  if (price === selectedPriceFilter) return;
+  selectedPriceFilter = price;
+  syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
+  applyVisiblePriceFilter();
+  triggerMarketplaceRefresh();
+}
+
+function cleanupLegacyPriceParam() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("price")) return;
+  url.searchParams.delete("price");
+  history.replaceState(history.state, "", url);
+}
+
+function triggerMarketplaceRefresh() {
+  if (location.pathname.startsWith("/marketplace/models/")) {
+    scheduleRouteScans();
+    return;
+  }
+  const targetSort = currentPriceFilter() === "free" ? MARKETPLACE_FREE_SORT_TEXT : MARKETPLACE_DEFAULT_SORT_TEXT;
+  if (triggerMarketplaceSortRefresh(targetSort)) return;
+  scheduleRouteScans();
+}
+
+function triggerMarketplaceSortRefresh(targetText) {
+  const trigger = findMarketplaceSortTrigger();
+  if (!trigger) return false;
+  const fetchStartedAt = lastMarketplaceChannelsFetchAt;
+  openSelectLikeUser(trigger);
+  setTimeout(() => {
+    const option = findVisibleOptionByText(targetText);
+    if (option) selectOptionLikeUser(option);
+  }, 0);
+  setTimeout(() => {
+    if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
+  }, 260);
+  return true;
+}
+
+function resetPriceFilterState() {
+  if (selectedPriceFilter === "all") return;
+  selectedPriceFilter = "all";
+  applyVisiblePriceFilter();
+}
+
+function findMarketplaceSortTrigger() {
+  const anchors = findMarketplaceFilterFields();
+  return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
+}
+
+function findVisibleOptionByText(text) {
+  return Array.from(document.querySelectorAll('[role="option"]')).find((option) =>
+    cleanText(option.textContent) === text && isElementVisible(option),
+  ) || null;
+}
+
+function isElementVisible(element) {
+  return Boolean(element?.offsetParent || element?.getClientRects?.().length);
+}
+
+function cleanupMarketplaceSearchInput(input = findMarketplaceSearchInput()) {
+  if (!input || !hasMarketplaceSearchMarker(input.value)) return;
+  setInputValue(input, cleanMarketplaceSearch(input.value));
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setInputValue(input, value) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setter) setter.call(input, value);
+  else input.value = value;
+}
+
+function findMarketplaceSearchInput() {
+  return Array.from(document.querySelectorAll("main input")).find((input) =>
+    MARKETPLACE_SEARCH_PLACEHOLDER_RE.test(String(input.placeholder || "")),
+  ) || null;
+}
+
+function applyVisiblePriceFilter() {
+  if (!location.pathname.startsWith("/marketplace/models/")) return;
+  const mode = currentPriceFilter();
+  for (const button of findChannelActionButtons()) {
+    const context = findChannelContext(button);
+    const channel = findActionButtonChannel(button);
+    const state = modelProviderFreeState(channel);
+    const hidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+    if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
+  }
+}
+
+function findActionButtonChannel(button) {
+  if (isTriggerButton(button)) {
+    return { id: button.dataset.channelId || "", name: button.dataset.channelName || "" };
+  }
+  return findChannelFromButton(button);
+}
+
+function insertRequestTriggers() {
+  if (!isRequestsConsumerRoute()) {
+    document.querySelectorAll(`.${REQUEST_TRIGGER_CLASS}`).forEach((button) => button.remove?.());
+    return;
+  }
+  const apiKeyButton = findRequestsApiKeyFilterButton();
+  const host = apiKeyButton?.parentElement;
+  if (!apiKeyButton || !host || host.querySelector?.(`.${REQUEST_TRIGGER_CLASS}`)) return;
+  apiKeyButton.insertAdjacentElement("afterend", createRequestEditTrigger(apiKeyButton));
+}
+
+function isRequestsConsumerRoute() {
+  if (!location.pathname.startsWith("/project/requests")) return false;
+  const view = new URLSearchParams(location.search || "").get("view");
+  return !view || view === "consumer";
+}
+
+function findRequestsApiKeyFilterButton() {
+  return Array.from(document.querySelectorAll("main button"))
+    .find((button) => cleanText(button.textContent) === REQUESTS_API_KEY_LABEL);
+}
+
+function createRequestEditTrigger(anchor) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "更新 API 密钥";
+  button.className = anchor.className
+    || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-8 rounded-md px-3";
+  button.classList.add(TRIGGER_CLASS, REQUEST_TRIGGER_CLASS);
+  button.addEventListener("click", openRequestEditDialog);
+  return button;
+}
+
+function ensurePanel() {
+  injectStyle();
+  replaceApiKeyActionButtons();
+  removeMarketplaceVerificationButtons();
+  insertRequestTriggers();
+  insertPriceFilter();
+  applyVisiblePriceFilter();
+}
+
+function schedulePanel() {
+  if (!isTargetRoute()) return;
+  if (mountTimer) return;
+  mountTimer = requestFrame(() => {
+    mountTimer = 0;
+    ensurePanel();
+  });
+}
+
+function requestFrame(callback) {
+  return typeof requestAnimationFrame === "function" ? requestAnimationFrame(callback) : setTimeout(callback, 16);
+}
+
+function isTargetRoute(pathname = location.pathname) {
+  return pathname.startsWith("/marketplace")
+    || pathname.startsWith("/project/api-keys")
+    || pathname.startsWith("/project/requests");
+}
+
+function handleRouteChange() {
+  const route = `${location.pathname}${location.search || ""}`;
+  if (lastPathname === route) return;
+  lastPathname = route;
+  scheduleRouteScans();
+}
+
+function scheduleRouteScans() {
+  if (!isTargetRoute()) return;
+  schedulePanel();
+  setTimeout(schedulePanel, 120);
+  setTimeout(schedulePanel, 360);
+}
