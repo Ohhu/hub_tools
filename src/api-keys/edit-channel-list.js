@@ -1,4 +1,7 @@
 const EDIT_CHANNEL_ROW_STEP = 40;
+const EDIT_CHANNEL_ROW_HEIGHT = 36;
+const EDIT_DRAG_SCROLL_EDGE = 34;
+const EDIT_DRAG_SCROLL_SPEED = 4.3;
 
 function addCurrentChannelToEditList() {
   const numericID = extractNumericChannelID(currentChannelID());
@@ -59,9 +62,11 @@ function handleEditChannelDragMove(event) {
   const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
   if (!list || !editChannelIDs.length) return;
   const listRect = list.getBoundingClientRect();
-  const edge = 34;
-  if (event.clientY - listRect.top < edge) list.scrollTop = Math.max(0, (list.scrollTop || 0) - 4.3);
-  else if (listRect.bottom - event.clientY < edge) list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + 4.3);
+  if (event.clientY - listRect.top < EDIT_DRAG_SCROLL_EDGE) {
+    list.scrollTop = Math.max(0, (list.scrollTop || 0) - EDIT_DRAG_SCROLL_SPEED);
+  } else if (listRect.bottom - event.clientY < EDIT_DRAG_SCROLL_EDGE) {
+    list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + EDIT_DRAG_SCROLL_SPEED);
+  }
   const scrollTop = list.scrollTop || 0;
   const contentY = event.clientY - listRect.top + scrollTop;
   editDragState = {
@@ -115,7 +120,7 @@ function renderEditChannelStage() {
     return `<div class="hkb-channel-slot" style="top:${displayIndex * EDIT_CHANNEL_ROW_STEP}px">${renderEditChannelRow(id)}</div>`;
   }).join("");
   const placeholder = dragChannelID
-    ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:36px"></div>`
+    ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:${EDIT_CHANNEL_ROW_HEIGHT}px"></div>`
     : "";
   const dragTop = dragChannelID
     ? Math.max(0, Math.min((editChannelIDs.length - 1) * EDIT_CHANNEL_ROW_STEP, editDragState.pointerY - editDragState.listTop + editDragState.scrollTop - editDragState.grabOffsetY))
@@ -140,7 +145,7 @@ function renderEditChannelRow(channelID, options = {}) {
 
 function channelLabel(channelID) {
   const id = String(channelID || "");
-  const channel = channelCache.get(id) || channelCache.get(String(extractNumericChannelID(id) || ""));
+  const channel = findCachedChannelByID(id);
   return channel?.name || (id ? `Channel #${extractNumericChannelID(id) || id}` : "未读取到当前渠道");
 }
 

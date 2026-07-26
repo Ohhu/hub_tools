@@ -1,6 +1,7 @@
   function injectStyle() {
     if (document.getElementById(`${PANEL_ID}-style`)) return;
-    const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
+    const style = document.createElement("style");
+    style.id = `${PANEL_ID}-style`;
     style.textContent = `.${REQUEST_TRIGGER_CLASS}{margin-left:4px}
       .${CHANNEL_TRIGGER_CLASS}{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;min-height:28px;border:1px solid color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 24%,var(--border,hsl(20 5.9% 90%)));border-radius:8px;background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 7%,transparent);color:var(--primary,hsl(20 14.3% 4.1%));padding:0 10px;font:inherit;font-size:12px;font-weight:600;line-height:18px;white-space:nowrap;cursor:pointer;box-shadow:none;transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       .${CHANNEL_TRIGGER_CLASS}:hover{border-color:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 42%,var(--border,hsl(20 5.9% 90%)));background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 13%,transparent)}
@@ -116,11 +117,16 @@
       else if (action === "create-bind") await createKeyAndBind();
       else if (action === "copy-created-key") await copyCreatedKey();
       else if (action === "copy-key") await copySelectedKey();
-    } catch (error) { setStatus(error?.message || "操作失败"); } finally { setBusy(false); }
+    } catch (error) {
+      setStatus(error?.message || "操作失败");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function openDialog() {
-    ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
+    ensureDialog();
+    document.getElementById(DIALOG_ID).hidden = false;
     const channel = { id: this?.dataset?.channelId || "", name: this?.dataset?.channelName || "" };
     setCurrentChannel(channel);
     setCreatedKeyValue("");
@@ -130,7 +136,8 @@
   }
 
   function openRequestEditDialog() {
-    ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
+    ensureDialog();
+    document.getElementById(DIALOG_ID).hidden = false;
     setCurrentChannel({ id: "", name: "" }, { allowEmpty: true });
     setCreatedKeyValue("");
     setKeyMode("update");
@@ -141,13 +148,15 @@
   }
 
   function closeDialog() {
-    const dialog = document.getElementById(DIALOG_ID); if (dialog) dialog.hidden = true;
+    const dialog = document.getElementById(DIALOG_ID);
+    if (dialog) dialog.hidden = true;
   }
 
   function ensureDialog() {
     if (document.getElementById(DIALOG_ID)) return;
     const dialog = document.createElement("div");
-    dialog.id = DIALOG_ID; dialog.hidden = true;
+    dialog.id = DIALOG_ID;
+    dialog.hidden = true;
     dialog.innerHTML = `<div class="hkb-card" role="dialog" aria-modal="true" aria-label="API 密钥渠道管理">
       <div class="hkb-main" data-view-panel="main">
         <div class="hkb-switch" role="tablist" aria-label="密钥操作">

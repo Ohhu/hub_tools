@@ -1,12 +1,16 @@
 const nativeFetch = window.fetch.bind(window);
 const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
-const channelCache = new Map(), channelNameCache = new Map();
+const channelCache = new Map();
+const channelNameCache = new Map();
 const channelNameRequestCache = new Map();
 const modelProviderPriceCache = new Map();
 const channelModelPricesCache = new Map();
 const modelPageImplicitFreeCache = new Map();
 const requestBodyTextCache = new WeakMap();
-let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
+let meCache = null;
+let keysCache = [];
+let selectedKeyID = "";
+let mountTimer = 0;
 let selectedPriceFilter = "all";
 let createdKeyValueCache = "";
 let lastMarketplaceChannelsFetchAt = 0;

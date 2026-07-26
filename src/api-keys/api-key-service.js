@@ -13,7 +13,7 @@ async function loadChannelName(channelID) {
   if (channelNameRequestCache.has(numericID)) return channelNameRequestCache.get(numericID);
   const request = graphql(
     queries.getChannelName,
-    { id: `gid://axonhub/Channel/${numericID}` },
+    { id: channelGID(numericID) },
     "GetChannelName",
   ).then((data) => {
     const channel = data?.node;

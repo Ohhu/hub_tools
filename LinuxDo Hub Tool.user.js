@@ -16,7 +16,8 @@
 
 const GRAPHQL_PATH = "/admin/graphql";
 const PROJECT_ID = "gid://axonhub/Project/1";
-const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
+const PANEL_ID = "linuxdo-hub-tool";
+const TRIGGER_CLASS = `${PANEL_ID}-trigger`;
 const CHANNEL_TRIGGER_CLASS = `${PANEL_ID}-channel-trigger`;
 const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
 const DIALOG_ID = `${PANEL_ID}-dialog`;
@@ -36,13 +37,17 @@ const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"
 
 const nativeFetch = window.fetch.bind(window);
 const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
-const channelCache = new Map(), channelNameCache = new Map();
+const channelCache = new Map();
+const channelNameCache = new Map();
 const channelNameRequestCache = new Map();
 const modelProviderPriceCache = new Map();
 const channelModelPricesCache = new Map();
 const modelPageImplicitFreeCache = new Map();
 const requestBodyTextCache = new WeakMap();
-let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
+let meCache = null;
+let keysCache = [];
+let selectedKeyID = "";
+let mountTimer = 0;
 let selectedPriceFilter = "all";
 let createdKeyValueCache = "";
 let lastMarketplaceChannelsFetchAt = 0;
@@ -67,10 +72,6 @@ function graphqlOperationName(bodyText) {
   } catch {
     return "";
   }
-}
-
-async function rememberRequestBodyText(input, init) {
-  await readRequestBodyText(input, init);
 }
 
 async function readRequestBodyText(input, init) {
@@ -643,12 +644,11 @@ function createZeroPriceItem(itemCode) {
 
   window.fetch = async function patchedFetch(input, init) {
     const sanitizedRequest = sanitizeMarketplaceChannelsRequest(input, init);
-    await rememberRequestBodyText(sanitizedRequest.input, sanitizedRequest.init);
+    await readRequestBodyText(sanitizedRequest.input, sanitizedRequest.init);
     const nextRequest = await withMarketplaceModelPricingFields(sanitizedRequest.input, sanitizedRequest.init);
     if (isMarketplaceChannelsUrl(requestUrl(nextRequest.input))) lastMarketplaceChannelsFetchAt = Date.now();
     rememberRequestHeaders(nextRequest.input, nextRequest.init);
     const response = await nativeFetch(nextRequest.input, nextRequest.init);
-    rememberGraphqlContext(nextRequest.input, nextRequest.init);
     rememberResponseChannels(response);
     schedulePanel();
     return wrapMarketplaceChannelsResponse(nextRequest.input, nextRequest.init, response);
@@ -663,20 +663,11 @@ function createZeroPriceItem(itemCode) {
     return { input, init };
   }
 
-  function rememberGraphqlContext(input, init) {
-    const url = typeof input === "string" ? input : input?.url;
-    if (!String(url || "").includes(GRAPHQL_PATH)) return;
-    rememberGraphqlHeaders(input, init);
-  }
-
   function rememberRequestHeaders(input, init) {
     if (!requestPath(input).startsWith("/admin/")) return;
-    rememberGraphqlHeaders(input, init);
-  }
-
-  function rememberGraphqlHeaders(input, init) {
     const headers = new Headers(init?.headers || input?.headers || {});
-    const auth = headers.get("authorization"), projectID = headers.get("x-project-id");
+    const auth = headers.get("authorization");
+    const projectID = headers.get("x-project-id");
     if (auth) graphqlHeaders.authorization = auth;
     if (projectID) graphqlHeaders.projectID = projectID;
   }
@@ -735,7 +726,7 @@ function createZeroPriceItem(itemCode) {
     if (!location.pathname.startsWith("/marketplace/models/")) return false;
     if (response?.headers?.get?.("content-type") && !isJsonResponse(response)) return false;
     const body = requestBodyText(input, init);
-    return body.includes("MarketplaceModel") || body.includes("marketplaceModel");
+    return isMarketplaceModelRequestBody(body);
   }
 
   function isGraphqlChannelModelPricesRequest(input, init, response) {
@@ -793,7 +784,7 @@ function knownPayloadChannels(payload) {
 }
 
   function findCachedChannel(name) {
-    return channelNameCache.get(normalizeChannelName(name));
+    return channelNameCache.get(cleanText(name));
   }
 
   function findCachedChannelByID(channelID) {
@@ -863,8 +854,7 @@ function knownPayloadChannels(payload) {
   }
 
   function modelProviderCacheKey(channelID, modelID) {
-    const numericID = extractNumericChannelID(channelID);
-    return `${numericID || String(channelID || "")}:${normalizeModelID(modelID)}`;
+    return `${channelCacheKey(channelID)}:${normalizeModelID(modelID)}`;
   }
 
   function rememberChannel(channel) {
@@ -889,12 +879,8 @@ function knownPayloadChannels(payload) {
     channelCache.set(item.id, item);
     const numericID = extractNumericChannelID(item.id);
     if (numericID) channelCache.set(String(numericID), item);
-    channelNameCache.set(normalizeChannelName(item.name), item);
+    channelNameCache.set(cleanText(item.name), item);
     return true;
-  }
-
-  function normalizeChannelName(name) {
-    return cleanText(name);
   }
 
   function sameStringArray(left, right) {
@@ -1085,12 +1071,8 @@ function findChannelFromButton(node) {
 }
 
 function findVisibleChannelName(node) {
-  return findCardChannelName(node) || findChannelNameFromText(findContextTextBeforeButton(findChannelContext(node), node));
-}
-
-function findContextTextBeforeButton(context, button) {
-  if (!context) return "";
-  return textBeforeButton(context, button);
+  const context = findChannelContext(node);
+  return findCardChannelName(node) || findChannelNameFromText(context ? textBeforeButton(context, node) : "");
 }
 
 function textBeforeButton(context, button) {
@@ -1494,7 +1476,7 @@ async function loadChannelName(channelID) {
   if (channelNameRequestCache.has(numericID)) return channelNameRequestCache.get(numericID);
   const request = graphql(
     queries.getChannelName,
-    { id: `gid://axonhub/Channel/${numericID}` },
+    { id: channelGID(numericID) },
     "GetChannelName",
   ).then((data) => {
     const channel = data?.node;
@@ -1603,6 +1585,9 @@ function closeKeyMenu() {
 }
 
 const EDIT_CHANNEL_ROW_STEP = 40;
+const EDIT_CHANNEL_ROW_HEIGHT = 36;
+const EDIT_DRAG_SCROLL_EDGE = 34;
+const EDIT_DRAG_SCROLL_SPEED = 4.3;
 
 function addCurrentChannelToEditList() {
   const numericID = extractNumericChannelID(currentChannelID());
@@ -1663,9 +1648,11 @@ function handleEditChannelDragMove(event) {
   const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
   if (!list || !editChannelIDs.length) return;
   const listRect = list.getBoundingClientRect();
-  const edge = 34;
-  if (event.clientY - listRect.top < edge) list.scrollTop = Math.max(0, (list.scrollTop || 0) - 4.3);
-  else if (listRect.bottom - event.clientY < edge) list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + 4.3);
+  if (event.clientY - listRect.top < EDIT_DRAG_SCROLL_EDGE) {
+    list.scrollTop = Math.max(0, (list.scrollTop || 0) - EDIT_DRAG_SCROLL_SPEED);
+  } else if (listRect.bottom - event.clientY < EDIT_DRAG_SCROLL_EDGE) {
+    list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + EDIT_DRAG_SCROLL_SPEED);
+  }
   const scrollTop = list.scrollTop || 0;
   const contentY = event.clientY - listRect.top + scrollTop;
   editDragState = {
@@ -1719,7 +1706,7 @@ function renderEditChannelStage() {
     return `<div class="hkb-channel-slot" style="top:${displayIndex * EDIT_CHANNEL_ROW_STEP}px">${renderEditChannelRow(id)}</div>`;
   }).join("");
   const placeholder = dragChannelID
-    ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:36px"></div>`
+    ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:${EDIT_CHANNEL_ROW_HEIGHT}px"></div>`
     : "";
   const dragTop = dragChannelID
     ? Math.max(0, Math.min((editChannelIDs.length - 1) * EDIT_CHANNEL_ROW_STEP, editDragState.pointerY - editDragState.listTop + editDragState.scrollTop - editDragState.grabOffsetY))
@@ -1744,7 +1731,7 @@ function renderEditChannelRow(channelID, options = {}) {
 
 function channelLabel(channelID) {
   const id = String(channelID || "");
-  const channel = channelCache.get(id) || channelCache.get(String(extractNumericChannelID(id) || ""));
+  const channel = findCachedChannelByID(id);
   return channel?.name || (id ? `Channel #${extractNumericChannelID(id) || id}` : "未读取到当前渠道");
 }
 
@@ -1934,7 +1921,8 @@ function escapeHtml(value) {
 
   function injectStyle() {
     if (document.getElementById(`${PANEL_ID}-style`)) return;
-    const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
+    const style = document.createElement("style");
+    style.id = `${PANEL_ID}-style`;
     style.textContent = `.${REQUEST_TRIGGER_CLASS}{margin-left:4px}
       .${CHANNEL_TRIGGER_CLASS}{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;min-height:28px;border:1px solid color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 24%,var(--border,hsl(20 5.9% 90%)));border-radius:8px;background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 7%,transparent);color:var(--primary,hsl(20 14.3% 4.1%));padding:0 10px;font:inherit;font-size:12px;font-weight:600;line-height:18px;white-space:nowrap;cursor:pointer;box-shadow:none;transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       .${CHANNEL_TRIGGER_CLASS}:hover{border-color:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 42%,var(--border,hsl(20 5.9% 90%)));background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 13%,transparent)}
@@ -2050,11 +2038,16 @@ function escapeHtml(value) {
       else if (action === "create-bind") await createKeyAndBind();
       else if (action === "copy-created-key") await copyCreatedKey();
       else if (action === "copy-key") await copySelectedKey();
-    } catch (error) { setStatus(error?.message || "操作失败"); } finally { setBusy(false); }
+    } catch (error) {
+      setStatus(error?.message || "操作失败");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function openDialog() {
-    ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
+    ensureDialog();
+    document.getElementById(DIALOG_ID).hidden = false;
     const channel = { id: this?.dataset?.channelId || "", name: this?.dataset?.channelName || "" };
     setCurrentChannel(channel);
     setCreatedKeyValue("");
@@ -2064,7 +2057,8 @@ function escapeHtml(value) {
   }
 
   function openRequestEditDialog() {
-    ensureDialog(); document.getElementById(DIALOG_ID).hidden = false;
+    ensureDialog();
+    document.getElementById(DIALOG_ID).hidden = false;
     setCurrentChannel({ id: "", name: "" }, { allowEmpty: true });
     setCreatedKeyValue("");
     setKeyMode("update");
@@ -2075,13 +2069,15 @@ function escapeHtml(value) {
   }
 
   function closeDialog() {
-    const dialog = document.getElementById(DIALOG_ID); if (dialog) dialog.hidden = true;
+    const dialog = document.getElementById(DIALOG_ID);
+    if (dialog) dialog.hidden = true;
   }
 
   function ensureDialog() {
     if (document.getElementById(DIALOG_ID)) return;
     const dialog = document.createElement("div");
-    dialog.id = DIALOG_ID; dialog.hidden = true;
+    dialog.id = DIALOG_ID;
+    dialog.hidden = true;
     dialog.innerHTML = `<div class="hkb-card" role="dialog" aria-modal="true" aria-label="API 密钥渠道管理">
       <div class="hkb-main" data-view-panel="main">
         <div class="hkb-switch" role="tablist" aria-label="密钥操作">

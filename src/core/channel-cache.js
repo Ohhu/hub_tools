@@ -1,5 +1,5 @@
   function findCachedChannel(name) {
-    return channelNameCache.get(normalizeChannelName(name));
+    return channelNameCache.get(cleanText(name));
   }
 
   function findCachedChannelByID(channelID) {
@@ -69,8 +69,7 @@
   }
 
   function modelProviderCacheKey(channelID, modelID) {
-    const numericID = extractNumericChannelID(channelID);
-    return `${numericID || String(channelID || "")}:${normalizeModelID(modelID)}`;
+    return `${channelCacheKey(channelID)}:${normalizeModelID(modelID)}`;
   }
 
   function rememberChannel(channel) {
@@ -95,12 +94,8 @@
     channelCache.set(item.id, item);
     const numericID = extractNumericChannelID(item.id);
     if (numericID) channelCache.set(String(numericID), item);
-    channelNameCache.set(normalizeChannelName(item.name), item);
+    channelNameCache.set(cleanText(item.name), item);
     return true;
-  }
-
-  function normalizeChannelName(name) {
-    return cleanText(name);
   }
 
   function sameStringArray(left, right) {

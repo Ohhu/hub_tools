@@ -15,10 +15,6 @@ function graphqlOperationName(bodyText) {
   }
 }
 
-async function rememberRequestBodyText(input, init) {
-  await readRequestBodyText(input, init);
-}
-
 async function readRequestBodyText(input, init) {
   if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
   if (typeof Request !== "undefined" && input instanceof Request) {

@@ -119,12 +119,8 @@ function findChannelFromButton(node) {
 }
 
 function findVisibleChannelName(node) {
-  return findCardChannelName(node) || findChannelNameFromText(findContextTextBeforeButton(findChannelContext(node), node));
-}
-
-function findContextTextBeforeButton(context, button) {
-  if (!context) return "";
-  return textBeforeButton(context, button);
+  const context = findChannelContext(node);
+  return findCardChannelName(node) || findChannelNameFromText(context ? textBeforeButton(context, node) : "");
 }
 
 function textBeforeButton(context, button) {

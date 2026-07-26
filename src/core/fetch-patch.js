@@ -1,11 +1,10 @@
   window.fetch = async function patchedFetch(input, init) {
     const sanitizedRequest = sanitizeMarketplaceChannelsRequest(input, init);
-    await rememberRequestBodyText(sanitizedRequest.input, sanitizedRequest.init);
+    await readRequestBodyText(sanitizedRequest.input, sanitizedRequest.init);
     const nextRequest = await withMarketplaceModelPricingFields(sanitizedRequest.input, sanitizedRequest.init);
     if (isMarketplaceChannelsUrl(requestUrl(nextRequest.input))) lastMarketplaceChannelsFetchAt = Date.now();
     rememberRequestHeaders(nextRequest.input, nextRequest.init);
     const response = await nativeFetch(nextRequest.input, nextRequest.init);
-    rememberGraphqlContext(nextRequest.input, nextRequest.init);
     rememberResponseChannels(response);
     schedulePanel();
     return wrapMarketplaceChannelsResponse(nextRequest.input, nextRequest.init, response);
@@ -20,20 +19,11 @@
     return { input, init };
   }
 
-  function rememberGraphqlContext(input, init) {
-    const url = typeof input === "string" ? input : input?.url;
-    if (!String(url || "").includes(GRAPHQL_PATH)) return;
-    rememberGraphqlHeaders(input, init);
-  }
-
   function rememberRequestHeaders(input, init) {
     if (!requestPath(input).startsWith("/admin/")) return;
-    rememberGraphqlHeaders(input, init);
-  }
-
-  function rememberGraphqlHeaders(input, init) {
     const headers = new Headers(init?.headers || input?.headers || {});
-    const auth = headers.get("authorization"), projectID = headers.get("x-project-id");
+    const auth = headers.get("authorization");
+    const projectID = headers.get("x-project-id");
     if (auth) graphqlHeaders.authorization = auth;
     if (projectID) graphqlHeaders.projectID = projectID;
   }
@@ -92,7 +82,7 @@
     if (!location.pathname.startsWith("/marketplace/models/")) return false;
     if (response?.headers?.get?.("content-type") && !isJsonResponse(response)) return false;
     const body = requestBodyText(input, init);
-    return body.includes("MarketplaceModel") || body.includes("marketplaceModel");
+    return isMarketplaceModelRequestBody(body);
   }
 
   function isGraphqlChannelModelPricesRequest(input, init, response) {

@@ -1,6 +1,7 @@
 const GRAPHQL_PATH = "/admin/graphql";
 const PROJECT_ID = "gid://axonhub/Project/1";
-const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
+const PANEL_ID = "linuxdo-hub-tool";
+const TRIGGER_CLASS = `${PANEL_ID}-trigger`;
 const CHANNEL_TRIGGER_CLASS = `${PANEL_ID}-channel-trigger`;
 const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
 const DIALOG_ID = `${PANEL_ID}-dialog`;
