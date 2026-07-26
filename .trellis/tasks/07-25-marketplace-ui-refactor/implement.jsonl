@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端开发入口与检查清单"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "结构重构时避免重复边界"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "DOM、请求与数据缓存边界检查"}
