@@ -16,7 +16,7 @@
     if (!location.pathname.startsWith("/marketplace")) return;
     if (event.type === "keydown" && !["Enter", " ", "Spacebar"].includes(event.key)) return;
     const tab = event.target?.closest?.("[role='tab'], [data-slot='tabs-trigger']");
-    if (!tab || !/渠道广场|channel/i.test(String(tab.textContent || ""))) return;
+    if (!tab || !MARKETPLACE_CHANNEL_TAB_RE.test(String(tab.textContent || ""))) return;
     setTimeout(schedulePanel, 0);
     setTimeout(schedulePanel, 120);
   }
@@ -52,37 +52,16 @@
   else startMountWatcher();
 
   if (window.__hubKeyBinderEnableTest) {
-    let graphqlRunner = null;
-    const testGraphql = (query, variables = {}, operationName = undefined) =>
-      (graphqlRunner ? graphqlRunner(query, variables, operationName) : graphql(query, variables, operationName));
-    const testLoadChannelName = async (channelID) => {
-      const numericID = extractNumericChannelID(channelID);
-      if (!numericID) return null;
-      if (channelCache.has(String(numericID))) return channelCache.get(String(numericID));
-      const data = await testGraphql(
-        queries.getChannelName,
-        { id: `gid://axonhub/Channel/${numericID}` },
-        "GetChannelName",
-      );
-      const channel = data?.node;
-      if (!channel?.id || !channel?.name) return null;
-      rememberChannel(channel);
-      return channelCache.get(String(numericID)) || channel;
-    };
-    const testLoadMissingChannelNames = async (channelIDs) => {
-      const missingIDs = uniqueChannelIDs(channelIDs)
-        .filter((id) => !channelCache.has(String(id)))
-        .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
-      const results = await Promise.all(missingIDs.map((id) => testLoadChannelName(id).catch(() => null)));
-      return results.filter(Boolean).length;
-    };
     window.__hubKeyBinderTest = {
-      extractNumericChannelID,
       findChannelFromButton,
       isApiKeyActionButton,
-      isCreateApiButtonText,
+      isApiKeyActionButtonText,
+      isExistingApiKeyActionButtonText,
+      isMarketplaceVerificationButtonText,
+      selectPreferredApiKeyActionButton,
+      moveChannelTriggerToActionEnd,
+      movePriceFilterToEndOfGrid,
       rememberChannelsFromPayload,
-      apiKeyValue,
       buildProfilesInput,
       buildProfilesInputWithChannelIDs,
       moveChannelIDToIndex,
@@ -90,25 +69,19 @@
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
       augmentChannelModelPricesPayload,
-      channelFreeStateForModelDetail,
-      implicitFreePriceRowsForCurrentModelPage,
       ensurePricingFields,
       marketplaceChannelsScanUrl,
       sanitizeMarketplaceChannelsRequest,
-      cleanMarketplaceSearch,
       normalizePriceFilter,
       requestUrl,
       requestBodyText,
       readRequestBodyText,
       withMarketplaceModelPricingFields,
-      rememberModelProviderPricesFromPayload,
       isTargetRoute,
       isRequestsConsumerRoute,
-      findRequestsApiKeyFilterButton,
-      insertRequestTriggers,
       channelLabel,
-      loadMissingChannelNames: testLoadMissingChannelNames,
+      loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
-      __setGraphqlForTest: (runner) => { graphqlRunner = runner; },
+      __setGraphqlForTest: setGraphqlRunnerForTest,
     };
   }

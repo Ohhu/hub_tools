@@ -14,51 +14,632 @@
 (function () {
   "use strict";
 
-  const GRAPHQL_PATH = "/admin/graphql";
-  const PROJECT_ID = "gid://axonhub/Project/1";
-  const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
-  const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
-  const DIALOG_ID = `${PANEL_ID}-dialog`;
-  const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
-  const CHANNEL_NAME_LOOKUP_LIMIT = 20;
-  const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
-  const IMPLICIT_FREE_PRICE_LIMIT = 50;
-  const IMPLICIT_FREE_PRICE_ROW_PREFIX = "implicit-free";
-  const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
-  const WHITESPACE_RE = /\s+/g;
-  const CREATE_API_KEY_RE = /创建\s*API\s*密钥|Create\s*API\s*Key/i;
-  const HAS_FLAT_FEE_RE = /flatFee\b/;
-  const HAS_MODE_RE = /\bmode\b/;
-  const HTML_ESCAPE_RE = /[&<>"']/g;
-  const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
-  const nativeFetch = window.fetch.bind(window);
-  const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
-  const channelCache = new Map(), channelNameCache = new Map();
-  const channelNameRequestCache = new Map();
-  const modelProviderPriceCache = new Map();
-  const channelModelPricesCache = new Map();
-  const modelPageImplicitFreeCache = new Map();
-  const requestBodyTextCache = new WeakMap();
-  let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
-  let selectedPriceFilter = "all";
-  let createdKeyValueCache = "";
-  let lastMarketplaceChannelsFetchAt = 0;
-  let editChannelIDs = [];
-  let editLoadToken = 0;
-  let editDirty = false;
-  let editDragState = null;
-  let lastPathname = location.pathname;
+const GRAPHQL_PATH = "/admin/graphql";
+const PROJECT_ID = "gid://axonhub/Project/1";
+const PANEL_ID = "linuxdo-hub-tool", TRIGGER_CLASS = `${PANEL_ID}-trigger`;
+const CHANNEL_TRIGGER_CLASS = `${PANEL_ID}-channel-trigger`;
+const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
+const DIALOG_ID = `${PANEL_ID}-dialog`;
+const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
+const CHANNEL_NAME_LOOKUP_LIMIT = 20;
+const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
+const IMPLICIT_FREE_PRICE_LIMIT = 50;
+const IMPLICIT_FREE_PRICE_ROW_PREFIX = "implicit-free";
+const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
+const WHITESPACE_RE = /\s+/g;
+const API_KEY_CREATE_ACTION_RE = /^(?:创建\s*API\s*密钥|Create\s*API\s*Key)$/i;
+const API_KEY_EXISTING_ACTION_RE = /^(?:添加到已有密钥|Add\s+to\s+(?:an?\s+)?Existing(?:\s+API)?\s+Key)$/i;
+const HAS_FLAT_FEE_RE = /flatFee\b/;
+const HAS_MODE_RE = /\bmode\b/;
+const HTML_ESCAPE_RE = /[&<>"']/g;
+const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
 
-  const queries = {
-    createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
-    getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
-    getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
-    getKeyValue: "query GetApiKeyValue($id:ID!){node(id:$id){... on APIKey{id key}}}",
-    getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
-    getChannelModelPrices: "query ChannelModelPrices($id:ID!){node(id:$id){... on Channel{id channelModelPrices{id modelID price{items{itemCode multiplier pricing{mode flatFee usagePerUnit usageTiered{tiers{upTo pricePerUnit}}} promptWriteCacheVariants{variantCode pricing{mode flatFee usagePerUnit}}}}}}}}",
-    updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
-    me: "query Me{me{id projects{projectID}}}",
+const nativeFetch = window.fetch.bind(window);
+const graphqlHeaders = { authorization: "", projectID: PROJECT_ID };
+const channelCache = new Map(), channelNameCache = new Map();
+const channelNameRequestCache = new Map();
+const modelProviderPriceCache = new Map();
+const channelModelPricesCache = new Map();
+const modelPageImplicitFreeCache = new Map();
+const requestBodyTextCache = new WeakMap();
+let meCache = null, keysCache = [], selectedKeyID = "", mountTimer = 0;
+let selectedPriceFilter = "all";
+let createdKeyValueCache = "";
+let lastMarketplaceChannelsFetchAt = 0;
+let editChannelIDs = [];
+let editLoadToken = 0;
+let editDirty = false;
+let editDragState = null;
+let lastPathname = location.pathname;
+
+function requestUrl(input) {
+  if (input instanceof URL) return input.toString();
+  return String(typeof input === "string" ? input : input?.url || "");
+}
+
+function requestPath(input) {
+  return requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
+}
+
+function graphqlOperationName(bodyText) {
+  try {
+    return JSON.parse(String(bodyText || "")).operationName || "";
+  } catch {
+    return "";
+  }
+}
+
+async function rememberRequestBodyText(input, init) {
+  await readRequestBodyText(input, init);
+}
+
+async function readRequestBodyText(input, init) {
+  if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    if (requestBodyTextCache.has(input)) return requestBodyTextCache.get(input);
+    try {
+      const text = await input.clone().text();
+      requestBodyTextCache.set(input, text);
+      return text;
+    } catch {
+      requestBodyTextCache.set(input, "");
+      return "";
+    }
+  }
+  return requestBodyText(input, init);
+}
+
+function requestBodyText(input, init) {
+  if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
+  if (typeof Request !== "undefined" && input instanceof Request) return requestBodyTextCache.get(input) || "";
+  return bodyValueText(input?.body ?? "");
+}
+
+function bodyValueText(value) {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (typeof URLSearchParams !== "undefined" && value instanceof URLSearchParams) return value.toString();
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return "";
+  return String(value);
+}
+
+function isJsonResponse(response) {
+  return String(response?.headers?.get?.("content-type") || "").includes("application/json");
+}
+
+const queries = {
+  createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
+  getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
+  getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
+  getKeyValue: "query GetApiKeyValue($id:ID!){node(id:$id){... on APIKey{id key}}}",
+  getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
+  getChannelModelPrices: "query ChannelModelPrices($id:ID!){node(id:$id){... on Channel{id channelModelPrices{id modelID price{items{itemCode multiplier pricing{mode flatFee usagePerUnit usageTiered{tiers{upTo pricePerUnit}}} promptWriteCacheVariants{variantCode pricing{mode flatFee usagePerUnit}}}}}}}}",
+  updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
+  me: "query Me{me{id projects{projectID}}}",
+};
+
+let graphqlRunnerOverride = null;
+
+async function runGraphql(query, variables = {}, operationName = undefined, options = {}) {
+  if (graphqlRunnerOverride) return graphqlRunnerOverride(query, variables, operationName, options);
+  const request = typeof Request !== "undefined" && options.input instanceof Request ? options.input : null;
+  const headers = new Headers(options.init?.headers || request?.headers || {});
+  headers.set("content-type", "application/json");
+  if (!headers.has("x-project-id")) headers.set("x-project-id", graphqlHeaders.projectID);
+  if (!headers.has("authorization") && graphqlHeaders.authorization) headers.set("authorization", graphqlHeaders.authorization);
+  const response = await nativeFetch(new URL(GRAPHQL_PATH, location.origin), {
+    method: "POST",
+    credentials: options.credentials || options.init?.credentials || request?.credentials || "same-origin",
+    headers,
+    body: JSON.stringify({ query, variables, operationName }),
+  });
+  const payload = await response.json();
+  if (!response.ok || payload.errors?.length) throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
+  return payload.data;
+}
+
+function graphql(query, variables = {}, operationName = undefined) {
+  return runGraphql(query, variables, operationName);
+}
+
+function graphqlWithRequestContext(query, variables = {}, operationName = undefined, input, init) {
+  return runGraphql(query, variables, operationName, { input, init });
+}
+
+function setGraphqlRunnerForTest(runner) {
+  graphqlRunnerOverride = typeof runner === "function" ? runner : null;
+}
+
+async function withMarketplaceModelPricingFields(input, init) {
+  const bodyText = await readRequestBodyText(input, init);
+  if (!isMarketplaceModelRequestBody(bodyText)) return { input, init };
+  let body;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return { input, init };
+  }
+  const query = ensurePricingFields(body.query);
+  if (query === body.query) return { input, init };
+  const nextInit = {
+    ...init,
+    body: JSON.stringify({ ...body, query }),
   };
+  return { input, init: nextInit };
+}
+
+function isMarketplaceModelRequestBody(bodyText) {
+  const text = String(bodyText || "");
+  return text.includes("MarketplaceModel") || text.includes("marketplaceModel");
+}
+
+function ensurePricingFields(query) {
+  if (!query) return query;
+  const text = String(query);
+  let output = "", cursor = 0, changed = false;
+  const pricingStartRe = /pricing\s*\{/g;
+  for (let match; (match = pricingStartRe.exec(text));) {
+    const openIndex = text.indexOf("{", match.index);
+    const closeIndex = findMatchingBrace(text, openIndex);
+    if (openIndex < 0 || closeIndex < 0) break;
+    const block = text.slice(match.index, closeIndex + 1);
+    const inner = text.slice(openIndex + 1, closeIndex);
+    output += text.slice(cursor, match.index);
+    if (!/\busagePerUnit\b/.test(inner)) {
+      output += block;
+    } else {
+      const additions = [
+        HAS_MODE_RE.test(inner) ? "" : "\n          mode",
+        HAS_FLAT_FEE_RE.test(inner) ? "" : "\n          flatFee",
+      ].join("");
+      output += `${text.slice(match.index, openIndex + 1)}${additions}${inner}}`;
+      changed = changed || Boolean(additions);
+    }
+    cursor = closeIndex + 1;
+    pricingStartRe.lastIndex = closeIndex + 1;
+  }
+  output += text.slice(cursor);
+  return changed ? output : query;
+}
+
+function findMatchingBrace(text, openIndex) {
+  if (openIndex < 0 || text[openIndex] !== "{") return -1;
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index += 1) {
+    if (text[index] === "{") depth += 1;
+    else if (text[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function currentPriceFilter() {
+  return selectedPriceFilter;
+}
+
+function currentMarketplaceModelID() {
+  const match = location.pathname.match(/^\/marketplace\/models\/([^/?#]+)/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function marketplaceModelIDFromPayload(payload) {
+  return payload?.data?.marketplaceModel?.modelID || currentMarketplaceModelID();
+}
+
+function channelCacheKey(channelID) {
+  const numericID = extractNumericChannelID(channelID);
+  return numericID ? String(numericID) : String(channelID || "");
+}
+
+function channelGID(channelID) {
+  const numericID = extractNumericChannelID(channelID);
+  return numericID ? `gid://axonhub/Channel/${numericID}` : String(channelID || "");
+}
+
+function cleanMarketplaceSearchParam(url) {
+  const search = cleanMarketplaceSearch(url.searchParams.get("search"));
+  if (search) url.searchParams.set("search", search);
+  else url.searchParams.delete("search");
+}
+
+function cleanMarketplaceSearch(value) {
+  return String(value || "").replace(ZERO_WIDTH_RE, "").trim();
+}
+
+function cleanText(value) {
+  return String(value || "").replace(WHITESPACE_RE, " ").trim();
+}
+
+function marketplaceChannelsUrl(input) {
+  return new URL(requestUrl(input), location.origin);
+}
+
+function marketplaceChannelsFetchInit(input, init) {
+  const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
+  const method = init?.method || request?.method || "GET";
+  const nextInit = {
+    ...init,
+    method,
+    credentials: init?.credentials || request?.credentials || "same-origin",
+    headers: init?.headers || request?.headers,
+  };
+  if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") delete nextInit.body;
+  return nextInit;
+}
+
+function extractNumericChannelID(channelID) {
+  if (typeof channelID === "number") return Number.isFinite(channelID) ? channelID : null;
+  const text = String(channelID || "");
+  if (/^\d+$/.test(text)) return Number(text);
+  const match = text.match(/^gid:\/\/axonhub\/Channel\/(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function normalizePriceFilter(value) {
+  return value === "free" || value === "paid" ? value : "all";
+}
+
+function priceMatchesChannel(channel, mode) {
+  const freeState = marketplaceChannelFreeState(channel);
+  return priceStateMatches(freeState, mode);
+}
+
+function priceStateMatches(freeState, mode) {
+  return mode === "free" ? freeState === true : freeState === false;
+}
+
+function marketplaceChannelFreeState(channel) {
+  if (typeof channel?.priceSummary?.allFree === "boolean") return channel.priceSummary.allFree;
+  return null;
+}
+
+function channelFreeStateForModelDetail(channel, modelID = "") {
+  if (!Array.isArray(channel?.channelModelPrices)) return { free: true, reason: "missing_prices" };
+  const prices = channel.channelModelPrices;
+  if (prices.length === 0) return { free: true, reason: "empty_prices" };
+  const normalizedModelID = normalizeModelID(modelID);
+  if (!normalizedModelID) {
+    return { free: prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items)), reason: "all_models" };
+  }
+  const modelPrice = findModelPriceRow(prices, modelID);
+  if (!modelPrice) return { free: true, reason: "implicit_missing_row" };
+  return { free: modelPriceItemsFree(modelPrice?.price?.items), reason: "explicit_row" };
+}
+
+function modelPriceItemsFree(items) {
+  if (!Array.isArray(items) || items.length === 0) return false;
+  return items.every((item) => {
+    const pricing = item?.pricing || {};
+    return pricingFree(pricing)
+      && (item?.promptWriteCacheVariants || []).every((variant) => pricingFree(variant?.pricing));
+  });
+}
+
+function pricingFree(pricing) {
+  if (!pricing) return false;
+  if (pricing.mode === "flat_fee") return priceNumberFree(pricing.flatFee);
+  if (pricing.mode === "usage_per_unit") return priceNumberFree(pricing.usagePerUnit);
+  if (pricing.mode === "usage_tiered") {
+    const tiers = pricing.usageTiered?.tiers || [];
+    return tiers.length > 0 && tiers.every((tier) => priceNumberFree(tier?.pricePerUnit));
+  }
+  const values = [pricing.usagePerUnit, pricing.flatFee]
+    .concat((pricing.usageTiered?.tiers || []).map((tier) => tier?.pricePerUnit))
+    .map(parsePriceNumber)
+    .filter((number) => number !== null);
+  return values.length > 0 && values.every((number) => number <= 0);
+}
+
+function priceNumberFree(value) {
+  const number = parsePriceNumber(value);
+  return number !== null && number <= 0;
+}
+
+function parsePriceNumber(value) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeModelID(modelID) {
+  return String(modelID || "").trim().toLowerCase();
+}
+
+function matchedSupportedModels(channel, search) {
+  const needle = normalizeModelID(search);
+  if (!needle || !Array.isArray(channel?.supportedModels)) return [];
+  return channel.supportedModels.filter((modelID) => normalizeModelID(modelID).includes(needle));
+}
+
+function modelFreeInPriceRows(modelID, prices) {
+  const row = findModelPriceRow(prices, modelID);
+  return row ? modelPriceItemsFree(row?.price?.items) : true;
+}
+
+function findModelPriceRow(prices, modelID) {
+  const normalizedModelID = normalizeModelID(modelID);
+  return (prices || []).find((price) => normalizeModelID(price?.modelID) === normalizedModelID) || null;
+}
+
+function rememberImplicitFreeModelPageContext(channel, modelID, detail) {
+  if (detail.free === true && detail.reason === "implicit_missing_row" && channel?.id) {
+    rememberModelPageImplicitFree(channel.id, modelID);
+  }
+}
+
+function modelPageImplicitFreeKey(channelID, modelID) {
+  const channelKey = channelCacheKey(channelID);
+  const modelKey = normalizeModelID(modelID);
+  return channelKey && modelKey ? `${channelKey}:${modelKey}` : "";
+}
+
+function rememberModelPageImplicitFree(channelID, modelID) {
+  const key = modelPageImplicitFreeKey(channelID, modelID);
+  if (!key) return;
+  modelPageImplicitFreeCache.set(key, { channelID, modelID, pathname: location.pathname });
+}
+
+function hasModelPageImplicitFree(channelID, modelID) {
+  const key = modelPageImplicitFreeKey(channelID, modelID);
+  if (!key) return false;
+  const record = modelPageImplicitFreeCache.get(key);
+  return Boolean(record && record.pathname === location.pathname);
+}
+
+async function loadChannelModelPrices(channelID, input, init) {
+  const cacheKey = channelCacheKey(channelID);
+  if (!cacheKey) return [];
+  if (channelModelPricesCache.has(cacheKey)) {
+    const cached = channelModelPricesCache.get(cacheKey);
+    if (cached && typeof cached.then === "function") return cached;
+    if (Array.isArray(cached)) return cached;
+    channelModelPricesCache.delete(cacheKey);
+  }
+  const request = graphqlWithRequestContext(
+    queries.getChannelModelPrices,
+    { id: channelGID(channelID) },
+    "ChannelModelPrices",
+    input,
+    init,
+  )
+    .then((data) => data?.node?.channelModelPrices || [])
+    .then((prices) => {
+      cacheChannelModelPrices(channelID, prices);
+      return prices;
+    })
+    .catch(() => {
+      channelModelPricesCache.delete(cacheKey);
+      return null;
+    });
+  channelModelPricesCache.set(cacheKey, request);
+  return request;
+}
+
+function cacheChannelModelPrices(channelID, prices) {
+  const cacheKey = channelCacheKey(channelID);
+  if (!cacheKey || !Array.isArray(prices)) return;
+  channelModelPricesCache.set(cacheKey, prices);
+}
+
+async function filterMarketplacePayloadByPrice(payload, price) {
+  const mode = normalizePriceFilter(price);
+  if (mode === "all") return payload;
+  if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
+    const providers = payload.data.marketplaceModel.providers.filter((provider) =>
+      priceMatchesProviderForModel(provider, mode),
+    );
+    return {
+      ...payload,
+      data: {
+        ...payload.data,
+        marketplaceModel: {
+          ...payload.data.marketplaceModel,
+          providers,
+        },
+      },
+    };
+  }
+  if (!Array.isArray(payload?.items)) return payload;
+  const items = await filterMarketplaceChannelItems(payload.items, mode, "");
+  return {
+    ...payload,
+    items,
+    totalCount: items.length,
+    totalPages: 1,
+    page: 1,
+  };
+}
+
+function priceMatchesProviderForModel(provider, mode) {
+  const modelID = provider?.modelID || currentMarketplaceModelID();
+  const detail = channelFreeStateForModelDetail(provider?.channel, modelID);
+  if (mode === "free") rememberImplicitFreeModelPageContext(provider?.channel, modelID, detail);
+  return mode === "free" ? detail.free === true : detail.free === false;
+}
+
+async function filterMarketplaceChannelItems(items, mode, search, input, init) {
+  const checks = await Promise.all((items || []).map(async (item) =>
+    priceMatchesMarketplaceChannel(item, mode, search, input, init).catch(() => {
+      if (normalizePriceFilter(mode) === "free" && cleanMarketplaceSearch(search)) return false;
+      return priceMatchesChannel(item, mode);
+    }),
+  ));
+  return (items || []).filter((_, index) => checks[index]);
+}
+
+async function priceMatchesMarketplaceChannel(channel, mode, search, input, init) {
+  if (normalizePriceFilter(mode) !== "free" || !search) return priceMatchesChannel(channel, mode);
+  const freeState = await marketplaceChannelFreeStateForSearch(channel, search, input, init);
+  return freeState === true;
+}
+
+async function marketplaceChannelFreeStateForSearch(channel, search, input, init) {
+  const matchedModels = matchedSupportedModels(channel, search);
+  if (!matchedModels.length) return marketplaceChannelFreeState(channel);
+  if (!channel?.priceSummary?.hasPrices) return true;
+  const prices = await loadChannelModelPrices(channel.id, input, init);
+  if (!Array.isArray(prices)) return false;
+  return matchedModels.some((modelID) => modelFreeInPriceRows(modelID, prices));
+}
+
+async function loadFilteredMarketplaceChannelsPayload(input, init, firstPayload, mode) {
+  if (!Array.isArray(firstPayload?.items)) return firstPayload;
+  const search = cleanMarketplaceSearch(marketplaceChannelsUrl(input).searchParams.get("search"));
+  const first = marketplacePageSize(input, firstPayload);
+  const targetPage = marketplacePageNumber(input, firstPayload);
+  const needed = Math.max(first, targetPage * first);
+  const items = [];
+  let sourcePage = targetPage === 1 ? firstPayload : await fetchMarketplaceChannelsPage(input, init, 1);
+  let pageNumber = marketplacePayloadPageNumber(sourcePage, input);
+  let maxPages = Math.max(marketplacePayloadTotalPages(firstPayload), marketplacePayloadTotalPages(sourcePage));
+  while (sourcePage && pageNumber <= maxPages) {
+    items.push(...await filterMarketplaceChannelItems(sourcePage.items, mode, search, input, init));
+    if (shouldStopMarketplacePriceScan(sourcePage.items, mode, search) || items.length >= needed || pageNumber >= maxPages) break;
+    if (!Array.isArray(sourcePage.items) || sourcePage.items.length === 0) break;
+    pageNumber += 1;
+    sourcePage = await fetchMarketplaceChannelsPage(input, init, pageNumber);
+    maxPages = Math.max(maxPages, marketplacePayloadTotalPages(sourcePage));
+  }
+  const pageItems = items.slice((targetPage - 1) * first, targetPage * first);
+  const hasMore = pageNumber < maxPages && Array.isArray(sourcePage?.items) && sourcePage.items.length > 0;
+  const filteredTotal = items.length + (hasMore ? 1 : 0);
+  return {
+    ...firstPayload,
+    items: pageItems,
+    page: targetPage,
+    totalCount: filteredTotal,
+    totalPages: Math.max(1, Math.ceil(filteredTotal / first)),
+  };
+}
+
+function marketplacePageSize(input, payload) {
+  const first = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("first") || "", 10);
+  return Number.isFinite(first) && first > 0 ? first : Math.max(1, Number(payload?.items?.length) || 20);
+}
+
+function marketplacePageNumber(input, payload) {
+  const page = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("page") || "", 10);
+  return Number.isFinite(page) && page > 0 ? page : marketplacePayloadPageNumber(payload, input);
+}
+
+function marketplacePayloadPageNumber(payload, input) {
+  const page = Number(payload?.page);
+  if (Number.isFinite(page) && page > 0) return page;
+  const urlPage = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("page") || "", 10);
+  return Number.isFinite(urlPage) && urlPage > 0 ? urlPage : 1;
+}
+
+function marketplacePayloadTotalPages(payload) {
+  const totalPages = Number(payload?.totalPages);
+  if (Number.isFinite(totalPages) && totalPages > 0) return totalPages;
+  return Array.isArray(payload?.items) && payload.items.length ? Number.MAX_SAFE_INTEGER : 1;
+}
+
+async function fetchMarketplaceChannelsPage(input, init, page) {
+  const url = marketplaceChannelsScanUrl(requestUrl(input), currentPriceFilter(), page);
+  const response = await nativeFetch(url, marketplaceChannelsFetchInit(input, init));
+  return response.json();
+}
+
+function marketplaceChannelsScanUrl(url, mode, page) {
+  const nextUrl = new URL(url, location.origin);
+  nextUrl.searchParams.set("page", String(page));
+  cleanMarketplaceSearchParam(nextUrl);
+  if (normalizePriceFilter(mode) === "free") nextUrl.searchParams.set("sort", "multiplier_asc");
+  return nextUrl;
+}
+
+function shouldStopMarketplacePriceScan(items, mode, search) {
+  if (normalizePriceFilter(mode) !== "free") return false;
+  if (cleanMarketplaceSearch(search)) return false;
+  return (items || []).some((item) => marketplaceChannelFreeState(item) === false);
+}
+
+function augmentChannelModelPricesPayload(input, init, payload) {
+  const channel = payload?.data?.node;
+  const prices = channel?.channelModelPrices;
+  if (!channel?.id || !Array.isArray(prices)) return payload;
+  cacheChannelModelPrices(channel.id, prices);
+  const implicitRows = implicitFreePriceRowsForCurrentContext(channel.id, prices);
+  if (!implicitRows.length) return payload;
+  return {
+    ...payload,
+    data: {
+      ...payload.data,
+      node: {
+        ...channel,
+        channelModelPrices: [...implicitRows, ...prices],
+      },
+    },
+  };
+}
+
+function implicitFreePriceRowsForCurrentContext(channelID, prices) {
+  return [
+    ...implicitFreePriceRowsForCurrentSearch(channelID, prices),
+    ...implicitFreePriceRowsForCurrentModelPage(channelID, prices),
+  ];
+}
+
+function implicitFreePriceRowsForCurrentSearch(channelID, prices) {
+  const search = cleanMarketplaceSearch(findMarketplaceSearchInput()?.value);
+  if (!search) return [];
+  const channel = findCachedChannelByID(channelID);
+  if (!channel?.priceSummary?.hasPrices) return [];
+  const supportedModels = matchedSupportedModels(channel, search);
+  if (!supportedModels.length) return [];
+  const existing = existingModelPriceIDSet(prices);
+  return supportedModels
+    .filter((modelID) => !existing.has(normalizeModelID(modelID)))
+    .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
+    .map((modelID) => createImplicitFreePriceRow(channelID, modelID));
+}
+
+function implicitFreePriceRowsForCurrentModelPage(channelID, prices) {
+  if (!location.pathname.startsWith("/marketplace/models/")) return [];
+  if (currentPriceFilter() !== "free") return [];
+  const modelID = currentMarketplaceModelID();
+  if (!modelID || !hasModelPageImplicitFree(channelID, modelID)) return [];
+  const existing = existingModelPriceIDSet(prices);
+  return existing.has(normalizeModelID(modelID)) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
+}
+
+function existingModelPriceIDSet(prices) {
+  return new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+}
+
+function createImplicitFreePriceRow(channelID, modelID) {
+  return {
+    id: `${IMPLICIT_FREE_PRICE_ROW_PREFIX}:${channelCacheKey(channelID)}:${modelID}`,
+    modelID,
+    price: {
+      items: [
+        createZeroPriceItem("prompt_tokens"),
+        createZeroPriceItem("completion_tokens"),
+      ],
+    },
+  };
+}
+
+function createZeroPriceItem(itemCode) {
+  return {
+    itemCode,
+    multiplier: 0,
+    pricing: {
+      mode: "usage_per_unit",
+      flatFee: 0,
+      usagePerUnit: 0,
+      usageTiered: { tiers: [] },
+    },
+    promptWriteCacheVariants: [],
+  };
+}
 
   window.fetch = async function patchedFetch(input, init) {
     const sanitizedRequest = sanitizeMarketplaceChannelsRequest(input, init);
@@ -89,9 +670,7 @@
   }
 
   function rememberRequestHeaders(input, init) {
-    const url = requestUrl(input);
-    const path = String(url || "").replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    if (!path.startsWith("/admin/")) return;
+    if (!requestPath(input).startsWith("/admin/")) return;
     rememberGraphqlHeaders(input, init);
   }
 
@@ -103,8 +682,7 @@
   }
 
   function rememberResponseChannels(response) {
-    const type = response?.headers?.get?.("content-type") || "";
-    if (!type.includes("application/json")) return;
+    if (!isJsonResponse(response)) return;
     response.clone().json().then((payload) => {
       const changed = rememberChannelsFromPayload(payload);
       rememberModelProviderPricesFromPayload(payload);
@@ -149,1000 +727,70 @@
   }
 
   function isMarketplaceChannelsUrl(url) {
-    const value = String(url || "");
-    const path = value.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    return path === "/admin/marketplace/channels";
+    return requestPath(url) === "/admin/marketplace/channels";
   }
 
   function isGraphqlMarketplaceModelRequest(input, init, response) {
-    const path = requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    if (path !== GRAPHQL_PATH) return false;
+    if (requestPath(input) !== GRAPHQL_PATH) return false;
     if (!location.pathname.startsWith("/marketplace/models/")) return false;
-    if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
+    if (response?.headers?.get?.("content-type") && !isJsonResponse(response)) return false;
     const body = requestBodyText(input, init);
     return body.includes("MarketplaceModel") || body.includes("marketplaceModel");
   }
 
   function isGraphqlChannelModelPricesRequest(input, init, response) {
-    const path = requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    if (path !== GRAPHQL_PATH) return false;
+    if (requestPath(input) !== GRAPHQL_PATH) return false;
     if (!location.pathname.startsWith("/marketplace")) return false;
-    if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
+    if (response?.headers?.get?.("content-type") && !isJsonResponse(response)) return false;
     const body = requestBodyText(input, init);
     const operationName = graphqlOperationName(body);
     return operationName === "ChannelModelPrices"
       || /query\s+ChannelModelPrices\b/.test(body);
   }
 
-  function graphqlOperationName(bodyText) {
-    try {
-      return JSON.parse(String(bodyText || "")).operationName || "";
-    } catch {
-      return "";
+function findDirectReactChannel(node) {
+  for (const key of Object.keys(node || {})) {
+    if (key.startsWith("__reactProps$")) {
+      const channel = pickReactChannel(node[key]);
+      if (channel) return channel;
+    } else if (key.startsWith("__reactFiber$")) {
+      const channel = findChannelInFiber(node[key]);
+      if (channel) return channel;
     }
   }
-
-  function requestUrl(input) {
-    if (input instanceof URL) return input.toString();
-    return String(typeof input === "string" ? input : input?.url || "");
-  }
-
-  async function rememberRequestBodyText(input, init) {
-    await readRequestBodyText(input, init);
-  }
-
-  async function readRequestBodyText(input, init) {
-    if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
-    if (typeof Request !== "undefined" && input instanceof Request) {
-      if (requestBodyTextCache.has(input)) return requestBodyTextCache.get(input);
-      try {
-        const text = await input.clone().text();
-        requestBodyTextCache.set(input, text);
-        return text;
-      } catch {
-        requestBodyTextCache.set(input, "");
-        return "";
-      }
-    }
-    return requestBodyText(input, init);
-  }
-
-  function requestBodyText(input, init) {
-    if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
-    if (typeof Request !== "undefined" && input instanceof Request) return requestBodyTextCache.get(input) || "";
-    return bodyValueText(input?.body ?? "");
-  }
-
-  function bodyValueText(value) {
-    if (typeof value === "string") return value;
-    if (value == null) return "";
-    if (typeof URLSearchParams !== "undefined" && value instanceof URLSearchParams) return value.toString();
-    if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return "";
-    return String(value);
-  }
-
-  async function withMarketplaceModelPricingFields(input, init) {
-    const bodyText = await readRequestBodyText(input, init);
-    if (!isMarketplaceModelRequestBody(bodyText)) return { input, init };
-    let body;
-    try {
-      body = JSON.parse(bodyText);
-    } catch {
-      return { input, init };
-    }
-    const query = ensurePricingFields(body.query);
-    if (query === body.query) return { input, init };
-    const nextInit = {
-      ...init,
-      body: JSON.stringify({ ...body, query }),
-    };
-    return { input, init: nextInit };
-  }
-
-  function isMarketplaceModelRequestBody(bodyText) {
-    const text = String(bodyText || "");
-    return text.includes("MarketplaceModel") || text.includes("marketplaceModel");
-  }
-
-  function ensurePricingFields(query) {
-    if (!query) return query;
-    const text = String(query);
-    let output = "", cursor = 0, changed = false;
-    const pricingStartRe = /pricing\s*\{/g;
-    for (let match; (match = pricingStartRe.exec(text));) {
-      const openIndex = text.indexOf("{", match.index);
-      const closeIndex = findMatchingBrace(text, openIndex);
-      if (openIndex < 0 || closeIndex < 0) break;
-      const block = text.slice(match.index, closeIndex + 1);
-      const inner = text.slice(openIndex + 1, closeIndex);
-      output += text.slice(cursor, match.index);
-      if (!/\busagePerUnit\b/.test(inner)) {
-        output += block;
-      } else {
-        const additions = [
-          HAS_MODE_RE.test(inner) ? "" : "\n          mode",
-          HAS_FLAT_FEE_RE.test(inner) ? "" : "\n          flatFee",
-        ].join("");
-        output += `${text.slice(match.index, openIndex + 1)}${additions}${inner}}`;
-        changed = changed || Boolean(additions);
-      }
-      cursor = closeIndex + 1;
-      pricingStartRe.lastIndex = closeIndex + 1;
-    }
-    output += text.slice(cursor);
-    return changed ? output : query;
-  }
-
-  function findMatchingBrace(text, openIndex) {
-    if (openIndex < 0 || text[openIndex] !== "{") return -1;
-    let depth = 0;
-    for (let index = openIndex; index < text.length; index += 1) {
-      if (text[index] === "{") depth += 1;
-      else if (text[index] === "}") {
-        depth -= 1;
-        if (depth === 0) return index;
-      }
-    }
-    return -1;
-  }
-
-  function normalizePriceFilter(value) {
-    return value === "free" || value === "paid" ? value : "all";
-  }
-
-  function currentPriceFilter() {
-    return selectedPriceFilter;
-  }
-
-  function currentMarketplaceModelID() {
-    const match = location.pathname.match(/^\/marketplace\/models\/([^/?#]+)/);
-    if (!match) return "";
-    try {
-      return decodeURIComponent(match[1]);
-    } catch {
-      return match[1];
-    }
-  }
-
-  function marketplaceModelIDFromPayload(payload) {
-    return payload?.data?.marketplaceModel?.modelID || currentMarketplaceModelID();
-  }
-
-  async function filterMarketplacePayloadByPrice(payload, price) {
-    const mode = normalizePriceFilter(price);
-    if (mode === "all") return payload;
-    if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
-      const providers = payload.data.marketplaceModel.providers.filter((provider) =>
-        priceMatchesProviderForModel(provider, mode),
-      );
-      return {
-        ...payload,
-        data: {
-          ...payload.data,
-          marketplaceModel: {
-            ...payload.data.marketplaceModel,
-            providers,
-          },
-        },
-      };
-    }
-    if (!Array.isArray(payload?.items)) return payload;
-    const items = await filterMarketplaceChannelItems(payload.items, mode, "");
-    return {
-      ...payload,
-      items,
-      totalCount: items.length,
-      totalPages: 1,
-      page: 1,
-    };
-  }
-
-  function priceMatchesChannel(channel, mode) {
-    const freeState = marketplaceChannelFreeState(channel);
-    return mode === "free" ? freeState === true : freeState === false;
-  }
-
-  function priceMatchesProviderForModel(provider, mode) {
-    const modelID = provider?.modelID || currentMarketplaceModelID();
-    const detail = channelFreeStateForModelDetail(provider?.channel, modelID);
-    if (mode === "free") rememberImplicitFreeModelPageContext(provider?.channel, modelID, detail);
-    return mode === "free" ? detail.free === true : detail.free === false;
-  }
-
-  function marketplaceChannelFreeState(channel) {
-    if (typeof channel?.priceSummary?.allFree === "boolean") return channel.priceSummary.allFree;
-    return null;
-  }
-
-  function channelFreeStateForModelDetail(channel, modelID = "") {
-    if (!Array.isArray(channel?.channelModelPrices)) return { free: true, reason: "missing_prices" };
-    const prices = channel.channelModelPrices;
-    if (prices.length === 0) return { free: true, reason: "empty_prices" };
-    const normalizedModelID = normalizeModelID(modelID);
-    if (!normalizedModelID) {
-      return { free: prices.every((modelPrice) => modelPriceItemsFree(modelPrice?.price?.items)), reason: "all_models" };
-    }
-    const modelPrice = findModelPriceRow(prices, modelID);
-    if (!modelPrice) return { free: true, reason: "implicit_missing_row" };
-    return { free: modelPriceItemsFree(modelPrice?.price?.items), reason: "explicit_row" };
-  }
-
-  function rememberImplicitFreeModelPageContext(channel, modelID, detail) {
-    if (detail.free === true && detail.reason === "implicit_missing_row" && channel?.id) {
-      rememberModelPageImplicitFree(channel.id, modelID);
-    }
-  }
-
-  function modelPriceItemsFree(items) {
-    if (!Array.isArray(items) || items.length === 0) return false;
-    return (items || []).every((item) => {
-      const pricing = item?.pricing || {};
-      return pricingFree(pricing)
-        && (item?.promptWriteCacheVariants || []).every((variant) => pricingFree(variant?.pricing));
-    });
-  }
-
-  function pricingFree(pricing) {
-    if (!pricing) return false;
-    if (pricing.mode === "flat_fee") return priceNumberFree(pricing.flatFee);
-    if (pricing.mode === "usage_per_unit") return priceNumberFree(pricing.usagePerUnit);
-    if (pricing.mode === "usage_tiered") {
-      const tiers = pricing.usageTiered?.tiers || [];
-      return tiers.length > 0 && tiers.every((tier) => priceNumberFree(tier?.pricePerUnit));
-    }
-    const values = [pricing.usagePerUnit, pricing.flatFee]
-      .concat((pricing.usageTiered?.tiers || []).map((tier) => tier?.pricePerUnit))
-      .map(parsePriceNumber)
-      .filter((number) => number !== null);
-    return values.length > 0 && values.every((number) => number <= 0);
-  }
-
-  function priceNumberFree(value) {
-    const number = parsePriceNumber(value);
-    return number !== null && number <= 0;
-  }
-
-  function parsePriceNumber(value) {
-    const number = Number.parseFloat(value);
-    return Number.isFinite(number) ? number : null;
-  }
-
-  function normalizeModelID(modelID) {
-    return String(modelID || "").trim().toLowerCase();
-  }
-
-  async function loadFilteredMarketplaceChannelsPayload(input, init, firstPayload, mode) {
-    if (!Array.isArray(firstPayload?.items)) return firstPayload;
-    const search = cleanMarketplaceSearch(marketplaceChannelsUrl(input).searchParams.get("search"));
-    const first = marketplacePageSize(input, firstPayload);
-    const targetPage = marketplacePageNumber(input, firstPayload);
-    const needed = Math.max(first, targetPage * first);
-    const items = [];
-    let sourcePage = targetPage === 1 ? firstPayload : await fetchMarketplaceChannelsPage(input, init, 1);
-    let pageNumber = marketplacePayloadPageNumber(sourcePage, input);
-    let maxPages = Math.max(marketplacePayloadTotalPages(firstPayload), marketplacePayloadTotalPages(sourcePage));
-    while (sourcePage && pageNumber <= maxPages) {
-      items.push(...await filterMarketplaceChannelItems(sourcePage.items, mode, search, input, init));
-      if (shouldStopMarketplacePriceScan(sourcePage.items, mode, search) || items.length >= needed || pageNumber >= maxPages) break;
-      if (!Array.isArray(sourcePage.items) || sourcePage.items.length === 0) break;
-      pageNumber += 1;
-      sourcePage = await fetchMarketplaceChannelsPage(input, init, pageNumber);
-      maxPages = Math.max(maxPages, marketplacePayloadTotalPages(sourcePage));
-    }
-    const pageItems = items.slice((targetPage - 1) * first, targetPage * first);
-    const hasMore = pageNumber < maxPages && Array.isArray(sourcePage?.items) && sourcePage.items.length > 0;
-    const filteredTotal = items.length + (hasMore ? 1 : 0);
-    return {
-      ...firstPayload,
-      items: pageItems,
-      page: targetPage,
-      totalCount: filteredTotal,
-      totalPages: Math.max(1, Math.ceil(filteredTotal / first)),
-    };
-  }
-
-  async function filterMarketplaceChannelItems(items, mode, search, input, init) {
-    const checks = await Promise.all((items || []).map(async (item) =>
-      priceMatchesMarketplaceChannel(item, mode, search, input, init).catch(() => {
-        if (normalizePriceFilter(mode) === "free" && cleanMarketplaceSearch(search)) return false;
-        return priceMatchesChannel(item, mode);
-      }),
-    ));
-    return (items || []).filter((_, index) => checks[index]);
-  }
-
-  async function priceMatchesMarketplaceChannel(channel, mode, search, input, init) {
-    if (normalizePriceFilter(mode) !== "free" || !search) return priceMatchesChannel(channel, mode);
-    const freeState = await marketplaceChannelFreeStateForSearch(channel, search, input, init);
-    return freeState === true;
-  }
-
-  async function marketplaceChannelFreeStateForSearch(channel, search, input, init) {
-    const matchedModels = matchedSupportedModels(channel, search);
-    if (!matchedModels.length) return marketplaceChannelFreeState(channel);
-    if (!channel?.priceSummary?.hasPrices) return true;
-    const prices = await loadChannelModelPrices(channel.id, input, init);
-    if (!Array.isArray(prices)) return false;
-    return matchedModels.some((modelID) => modelFreeInPriceRows(modelID, prices));
-  }
-
-  function matchedSupportedModels(channel, search) {
-    const needle = normalizeModelID(search);
-    if (!needle || !Array.isArray(channel?.supportedModels)) return [];
-    return channel.supportedModels.filter((modelID) => normalizeModelID(modelID).includes(needle));
-  }
-
-  function modelFreeInPriceRows(modelID, prices) {
-    const row = findModelPriceRow(prices, modelID);
-    return row ? modelPriceItemsFree(row?.price?.items) : true;
-  }
-
-  function findModelPriceRow(prices, modelID) {
-    const normalizedModelID = normalizeModelID(modelID);
-    return (prices || []).find((price) => normalizeModelID(price?.modelID) === normalizedModelID) || null;
-  }
-
-  function modelPageImplicitFreeKey(channelID, modelID) {
-    const channelKey = channelCacheKey(channelID), modelKey = normalizeModelID(modelID);
-    return channelKey && modelKey ? `${channelKey}:${modelKey}` : "";
-  }
-
-  function rememberModelPageImplicitFree(channelID, modelID) {
-    const key = modelPageImplicitFreeKey(channelID, modelID);
-    if (!key) return;
-    modelPageImplicitFreeCache.set(key, { channelID, modelID, pathname: location.pathname });
-  }
-
-  function hasModelPageImplicitFree(channelID, modelID) {
-    const key = modelPageImplicitFreeKey(channelID, modelID);
-    if (!key) return false;
-    const record = modelPageImplicitFreeCache.get(key);
-    return Boolean(record && record.pathname === location.pathname);
-  }
-
-  async function loadChannelModelPrices(channelID, input, init) {
-    const cacheKey = channelCacheKey(channelID);
-    if (!cacheKey) return [];
-    if (channelModelPricesCache.has(cacheKey)) {
-      const cached = channelModelPricesCache.get(cacheKey);
-      if (cached && typeof cached.then === "function") return cached;
-      if (Array.isArray(cached)) return cached;
-      channelModelPricesCache.delete(cacheKey);
-    }
-    const request = graphqlWithRequestContext(
-      queries.getChannelModelPrices,
-      { id: channelGID(channelID) },
-      "ChannelModelPrices",
-      input,
-      init,
-    )
-      .then((data) => data?.node?.channelModelPrices || [])
-      .then((prices) => {
-        cacheChannelModelPrices(channelID, prices);
-        return prices;
-      })
-      .catch(() => {
-        channelModelPricesCache.delete(cacheKey);
-        return null;
-      });
-    channelModelPricesCache.set(cacheKey, request);
-    return request;
-  }
-
-  async function graphqlWithRequestContext(query, variables = {}, operationName = undefined, input, init) {
-    const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
-    const headers = new Headers(init?.headers || request?.headers || {});
-    headers.set("content-type", "application/json");
-    if (!headers.has("x-project-id")) headers.set("x-project-id", graphqlHeaders.projectID);
-    if (!headers.has("authorization") && graphqlHeaders.authorization) headers.set("authorization", graphqlHeaders.authorization);
-    const response = await nativeFetch(new URL(GRAPHQL_PATH, location.origin), {
-      method: "POST",
-      credentials: init?.credentials || request?.credentials || "same-origin",
-      headers,
-      body: JSON.stringify({ query, variables, operationName }),
-    });
-    const payload = await response.json();
-    if (!response.ok || payload.errors?.length) throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
-    return payload.data;
-  }
-
-  function cacheChannelModelPrices(channelID, prices) {
-    const cacheKey = channelCacheKey(channelID);
-    if (!cacheKey || !Array.isArray(prices)) return;
-    channelModelPricesCache.set(cacheKey, prices);
-    const numericID = extractNumericChannelID(channelID);
-    if (numericID) channelModelPricesCache.set(String(numericID), prices);
-  }
-
-  function channelCacheKey(channelID) {
-    const numericID = extractNumericChannelID(channelID);
-    return numericID ? String(numericID) : String(channelID || "");
-  }
-
-  function channelGID(channelID) {
-    const numericID = extractNumericChannelID(channelID);
-    return numericID ? `gid://axonhub/Channel/${numericID}` : String(channelID || "");
-  }
-
-  function augmentChannelModelPricesPayload(input, init, payload) {
-    const channel = payload?.data?.node;
-    const prices = channel?.channelModelPrices;
-    if (!channel?.id || !Array.isArray(prices)) return payload;
-    cacheChannelModelPrices(channel.id, prices);
-    const implicitRows = implicitFreePriceRowsForCurrentContext(channel.id, prices);
-    if (!implicitRows.length) return payload;
-    return {
-      ...payload,
-      data: {
-        ...payload.data,
-        node: {
-          ...channel,
-          channelModelPrices: [...implicitRows, ...prices],
-        },
-      },
-    };
-  }
-
-  function implicitFreePriceRowsForCurrentContext(channelID, prices) {
-    return [
-      ...implicitFreePriceRowsForCurrentSearch(channelID, prices),
-      ...implicitFreePriceRowsForCurrentModelPage(channelID, prices),
-    ];
-  }
-
-  function implicitFreePriceRowsForCurrentSearch(channelID, prices) {
-    const search = cleanMarketplaceSearch(findMarketplaceSearchInput()?.value);
-    if (!search) return [];
-    const channel = findCachedChannelByID(channelID);
-    if (!channel?.priceSummary?.hasPrices) return [];
-    const supportedModels = matchedSupportedModels(channel, search);
-    if (!supportedModels.length) return [];
-    const existing = existingModelPriceIDSet(prices);
-    return supportedModels
-      .filter((modelID) => !existing.has(normalizeModelID(modelID)))
-      .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
-      .map((modelID) => createImplicitFreePriceRow(channelID, modelID));
-  }
-
-  function implicitFreePriceRowsForCurrentModelPage(channelID, prices) {
-    if (!location.pathname.startsWith("/marketplace/models/")) return [];
-    if (currentPriceFilter() !== "free") return [];
-    const modelID = currentMarketplaceModelID();
-    if (!modelID || !hasModelPageImplicitFree(channelID, modelID)) return [];
-    const existing = existingModelPriceIDSet(prices);
-    return existing.has(normalizeModelID(modelID)) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
-  }
-
-  function existingModelPriceIDSet(prices) {
-    return new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
-  }
-
-  function createImplicitFreePriceRow(channelID, modelID) {
-    return {
-      id: `${IMPLICIT_FREE_PRICE_ROW_PREFIX}:${channelCacheKey(channelID)}:${modelID}`,
-      modelID,
-      price: {
-        items: [
-          createZeroPriceItem("prompt_tokens"),
-          createZeroPriceItem("completion_tokens"),
-        ],
-      },
-    };
-  }
-
-  function createZeroPriceItem(itemCode) {
-    return {
-      itemCode,
-      multiplier: 0,
-      pricing: {
-        mode: "usage_per_unit",
-        flatFee: 0,
-        usagePerUnit: 0,
-        usageTiered: { tiers: [] },
-      },
-      promptWriteCacheVariants: [],
-    };
-  }
-
-  function marketplacePageSize(input, payload) {
-    const first = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("first") || "", 10);
-    return Number.isFinite(first) && first > 0 ? first : Math.max(1, Number(payload?.items?.length) || 20);
-  }
-
-  function marketplacePageNumber(input, payload) {
-    const page = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("page") || "", 10);
-    return Number.isFinite(page) && page > 0 ? page : marketplacePayloadPageNumber(payload, input);
-  }
-
-  function marketplacePayloadPageNumber(payload, input) {
-    const page = Number(payload?.page);
-    if (Number.isFinite(page) && page > 0) return page;
-    const urlPage = Number.parseInt(marketplaceChannelsUrl(input).searchParams.get("page") || "", 10);
-    return Number.isFinite(urlPage) && urlPage > 0 ? urlPage : 1;
-  }
-
-  function marketplacePayloadTotalPages(payload) {
-    const totalPages = Number(payload?.totalPages);
-    if (Number.isFinite(totalPages) && totalPages > 0) return totalPages;
-    return Array.isArray(payload?.items) && payload.items.length ? Number.MAX_SAFE_INTEGER : 1;
-  }
-
-  async function fetchMarketplaceChannelsPage(input, init, page) {
-    const url = marketplaceChannelsScanUrl(requestUrl(input), currentPriceFilter(), page);
-    const response = await nativeFetch(url, marketplaceChannelsFetchInit(input, init));
-    return response.json();
-  }
-
-  function marketplaceChannelsScanUrl(url, mode, page) {
-    const nextUrl = new URL(url, location.origin);
-    nextUrl.searchParams.set("page", String(page));
-    cleanMarketplaceSearchParam(nextUrl);
-    if (normalizePriceFilter(mode) === "free") nextUrl.searchParams.set("sort", "multiplier_asc");
-    return nextUrl;
-  }
-
-  function cleanMarketplaceSearchParam(url) {
-    const search = cleanMarketplaceSearch(url.searchParams.get("search"));
-    if (search) url.searchParams.set("search", search);
-    else url.searchParams.delete("search");
-  }
-
-  function cleanMarketplaceSearch(value) {
-    return String(value || "").replace(ZERO_WIDTH_RE, "").trim();
-  }
-
-  function cleanText(value) {
-    return String(value || "").replace(WHITESPACE_RE, " ").trim();
-  }
-
-  function shouldStopMarketplacePriceScan(items, mode, search) {
-    if (normalizePriceFilter(mode) !== "free") return false;
-    if (cleanMarketplaceSearch(search)) return false;
-    return (items || []).some((item) => marketplaceChannelFreeState(item) === false);
-  }
-
-  function marketplaceChannelsUrl(input) {
-    return new URL(requestUrl(input), location.origin);
-  }
-
-  function marketplaceChannelsFetchInit(input, init) {
-    const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
-    const method = init?.method || request?.method || "GET";
-    const nextInit = {
-      ...init,
-      method,
-      credentials: init?.credentials || request?.credentials || "same-origin",
-      headers: init?.headers || request?.headers,
-    };
-    if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD") delete nextInit.body;
-    return nextInit;
-  }
-
-  function extractNumericChannelID(channelID) {
-    if (typeof channelID === "number") return Number.isFinite(channelID) ? channelID : null;
-    const text = String(channelID || "");
-    if (/^\d+$/.test(text)) return Number(text);
-    const match = text.match(/^gid:\/\/axonhub\/Channel\/(\d+)$/);
-    return match ? Number(match[1]) : null;
-  }
-
-  function schedulePanel() {
-    if (!isTargetRoute()) return;
-    if (mountTimer) return;
-    mountTimer = requestFrame(() => { mountTimer = 0; ensurePanel(); });
-  }
-
-  function requestFrame(callback) {
-    return typeof requestAnimationFrame === "function" ? requestAnimationFrame(callback) : setTimeout(callback, 16);
-  }
-
-  function isTargetRoute(pathname = location.pathname) {
-    return pathname.startsWith("/marketplace") || pathname.startsWith("/project/api-keys") || pathname.startsWith("/project/requests");
-  }
-
-  function handleRouteChange() {
-    const route = `${location.pathname}${location.search || ""}`;
-    if (lastPathname === route) return;
-    lastPathname = route;
-    scheduleRouteScans();
-  }
-
-  function scheduleRouteScans() {
-    if (!isTargetRoute()) return;
-    schedulePanel();
-    setTimeout(schedulePanel, 120);
-    setTimeout(schedulePanel, 360);
-  }
-
-  function ensurePanel() {
-    injectStyle();
-    for (const anchor of findCreateApiButtons()) replaceCreateApiButton(anchor);
-    insertRequestTriggers();
-    insertPriceFilter();
-    applyVisiblePriceFilter();
-  }
-
-  function insertRequestTriggers() {
-    if (!isRequestsConsumerRoute()) {
-      document.querySelectorAll(`.${REQUEST_TRIGGER_CLASS}`).forEach((button) => button.remove?.());
-      return;
-    }
-    const apiKeyButton = findRequestsApiKeyFilterButton();
-    const host = apiKeyButton?.parentElement;
-    if (!apiKeyButton || !host || host.querySelector?.(`.${REQUEST_TRIGGER_CLASS}`)) return;
-    apiKeyButton.insertAdjacentElement("afterend", createRequestEditTrigger(apiKeyButton));
-  }
-
-  function isRequestsConsumerRoute() {
-    if (!location.pathname.startsWith("/project/requests")) return false;
-    const view = new URLSearchParams(location.search || "").get("view");
-    return !view || view === "consumer";
-  }
-
-  function findRequestsApiKeyFilterButton() {
-    return Array.from(document.querySelectorAll("main button"))
-      .find((button) => cleanText(button.textContent) === "API密钥");
-  }
-
-  function createRequestEditTrigger(anchor) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = "更新 API 密钥";
-    button.className = anchor.className || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-8 rounded-md px-3";
-    button.classList.add(TRIGGER_CLASS, REQUEST_TRIGGER_CLASS);
-    button.addEventListener("click", openRequestEditDialog);
-    return button;
-  }
-
-  function findCreateApiButtons() {
-    return Array.from(document.querySelectorAll("main button")).filter(isApiKeyActionButton);
-  }
-
-  function findChannelActionButtons() {
-    return Array.from(document.querySelectorAll("main button")).filter((button) =>
-      isApiKeyActionButton(button) || isTriggerButton(button),
-    );
-  }
-
-  function isApiKeyActionButton(node) {
-    return !isTriggerButton(node) && isCreateApiButtonText(node.textContent || "");
-  }
-
-  function isCreateApiButtonText(text) {
-    return CREATE_API_KEY_RE.test(String(text || ""));
-  }
-
-  function isTriggerButton(node) {
-    return Boolean(node?.classList?.contains(TRIGGER_CLASS));
-  }
-
-  function replaceCreateApiButton(anchor) {
-    const channel = findChannelFromButton(anchor);
-    if (!channel.id) return;
-    const button = createTrigger(anchor, channel);
-    anchor.replaceWith(button);
-  }
-
-  function insertPriceFilter() {
-    if (!location.pathname.startsWith("/marketplace")) {
-      resetPriceFilterState();
-      document.getElementById(PRICE_FIELD_ID)?.remove();
-      return;
-    }
-    const anchors = findMarketplaceFilterFields();
-    if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
-      document.getElementById(PRICE_FIELD_ID)?.remove();
-      return;
-    }
-    const anchor = anchors.sort || anchors.tags;
-    if (!anchor) return;
-    let field = document.getElementById(PRICE_FIELD_ID);
-    if (!field) field = createPriceFilterField();
-    if (field.parentElement !== anchor.parentElement || field.previousElementSibling !== anchor) {
-      anchor.insertAdjacentElement("afterend", field);
-    }
-    field.parentElement?.classList?.add?.("hkb-price-filter-row");
-    alignPriceFilterWithSort(anchor, field);
-    cleanupMarketplaceSearchInput();
-    syncPriceFilterField(field);
-    alignPriceFilterWithSort(anchor, field);
-  }
-
-  function isMarketplaceChannelsTabActive() {
-    if (!location.pathname.startsWith("/marketplace")) return false;
-    const root = document.querySelector("main") || document;
-    const selected = root.querySelector('[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]');
-    return !selected || /渠道广场|channel/i.test(String(selected.textContent || ""));
-  }
-
-  function findMarketplaceFilterFields(fields = Array.from(marketplaceChannelsRoot().querySelectorAll("label, p, div, span"))) {
-    return {
-      tags: filterFieldByLabel(fields, /^(标签|tags?)$/i),
-      sort: filterFieldByLabel(fields, /^(排序|sort)$/i),
-    };
-  }
-
-  function marketplaceChannelsRoot() {
-    const main = document.querySelector("main") || document;
-    const panels = Array.from(main.querySelectorAll?.('[role="tabpanel"], [data-slot="tabs-content"]') || []);
-    return panels.find((panel) => isElementVisible(panel) && /渠道广场|按渠道名称|全部标签/i.test(String(panel.textContent || ""))) || main;
-  }
-
-  function filterFieldByLabel(elements, pattern) {
-    for (const label of elements) {
-      if (!isFilterLabelText(label.textContent, pattern)) continue;
-      const field = closestFilterField(label);
-      if (hasFilterControl(field)) return field;
-    }
-    return null;
-  }
-
-  function isFilterLabelText(text, pattern) {
-    const normalized = String(text || "").replace(/\s+/g, " ").trim();
-    return normalized.length <= 24 && pattern.test(normalized);
-  }
-
-  function closestFilterField(label) {
-    let current = label;
-    while (current && current !== document.body) {
-      if (hasFilterControl(current)) return current;
-      current = current.parentElement;
-    }
-    return null;
-  }
-
-  function hasFilterControl(field) {
-    return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
-  }
-
-  function alignPriceFilterWithSort(anchor, field) {
-    if (!anchor || !field) return;
-    anchor.classList?.add?.("hkb-sort-anchor");
-    const parent = field.parentElement;
-    const trigger = anchor.querySelector?.('[role="combobox"], button') || anchor;
-    const parentRect = parent?.getBoundingClientRect?.();
-    const anchorRect = anchor.getBoundingClientRect?.();
-    const triggerRect = trigger.getBoundingClientRect?.();
-    if (!parentRect || !anchorRect || !triggerRect) return;
-    field.style.setProperty("--hkb-price-left", `${Math.max(0, anchorRect.right - parentRect.left + 12)}px`);
-    field.style.setProperty("--hkb-price-top", `${Math.max(0, triggerRect.top - parentRect.top)}px`);
-  }
-
-  function createPriceFilterField() {
-    const field = document.createElement("div");
-    field.id = PRICE_FIELD_ID;
-    field.dataset.hubToolPriceFilter = "true";
-    field.innerHTML = `<button type="button" class="hkb-price-button border-input flex items-center justify-center gap-2 rounded-md border bg-transparent px-3 py-2 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-[3px]" data-size="default" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
-    field.addEventListener("click", handlePriceFilterClick);
-    return field;
-  }
-
-  function syncPriceFilterField(field) {
-    if (!field) return;
-    const price = currentPriceFilter();
-    field.querySelectorAll("[data-price]").forEach((button) => {
-      const selected = button.dataset.price === price;
-      button.setAttribute("aria-pressed", String(selected));
-    });
-  }
-
-  function handlePriceFilterClick(event) {
-    const button = event.target?.closest?.("[data-price]");
-    if (!button) return;
-    setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
-  }
-
-  function setPriceFilter(value) {
-    const price = normalizePriceFilter(value);
-    if (price === selectedPriceFilter) return;
-    selectedPriceFilter = price;
-    syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
-    applyVisiblePriceFilter();
-    triggerMarketplaceRefresh();
-  }
-
-  function cleanupLegacyPriceParam() {
-    const url = new URL(location.href);
-    if (!url.searchParams.has("price")) return;
-    url.searchParams.delete("price");
-    history.replaceState(history.state, "", url);
-  }
-
-  function triggerMarketplaceRefresh() {
-    if (location.pathname.startsWith("/marketplace/models/")) {
-      scheduleRouteScans();
-      return;
-    }
-    const targetSort = currentPriceFilter() === "free" ? "倍率从低到高" : "综合推荐";
-    if (triggerMarketplaceSortRefresh(targetSort)) return;
-    scheduleRouteScans();
-  }
-
-  function triggerMarketplaceSortRefresh(targetText) {
-    const trigger = findMarketplaceSortTrigger();
-    if (!trigger) return false;
-    const fetchStartedAt = lastMarketplaceChannelsFetchAt;
-    openSelectLikeUser(trigger);
-    setTimeout(() => {
-      const option = findVisibleOptionByText(targetText);
-      if (option) selectOptionLikeUser(option);
-    }, 0);
-    setTimeout(() => {
-      if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
-    }, 260);
-    return true;
-  }
-
-  function openSelectLikeUser(trigger) {
-    dispatchPointerEvent(trigger, "pointerdown", 1);
-  }
-
-  function selectOptionLikeUser(option) {
-    dispatchPointerEvent(option, "pointermove", 1);
-    dispatchMouseEvent(option, "mousemove", 1);
-    dispatchPointerEvent(option, "pointerup", 0);
-    dispatchMouseEvent(option, "mouseup", 0);
-    dispatchMouseEvent(option, "click", 0);
-  }
-
-  function dispatchPointerEvent(element, type, buttons) {
-    const init = mouseEventInit(element, buttons);
-    const event = typeof PointerEvent === "function"
-      ? new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true })
-      : new MouseEvent(type, init);
-    element.dispatchEvent(event);
-  }
-
-  function dispatchMouseEvent(element, type, buttons) {
-    element.dispatchEvent(new MouseEvent(type, mouseEventInit(element, buttons)));
-  }
-
-  function mouseEventInit(element, buttons) {
-    const rect = element.getBoundingClientRect?.();
-    const clientX = rect ? rect.left + rect.width / 2 : 0;
-    const clientY = rect ? rect.top + rect.height / 2 : 0;
-    return {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      button: 0,
-      buttons,
-      clientX,
-      clientY,
-    };
-  }
-
-  function resetPriceFilterState() {
-    if (selectedPriceFilter === "all") return;
-    selectedPriceFilter = "all";
-    applyVisiblePriceFilter();
-  }
-
-  function findMarketplaceSortTrigger() {
-    const anchors = findMarketplaceFilterFields();
-    return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
-  }
-
-  function findVisibleOptionByText(text) {
-    return Array.from(document.querySelectorAll('[role="option"]')).find((option) =>
-      cleanText(option.textContent) === text && isElementVisible(option),
-    ) || null;
-  }
-
-  function isElementVisible(element) {
-    return Boolean(element?.offsetParent || element?.getClientRects?.().length);
-  }
-
-  function cleanupMarketplaceSearchInput(input = findMarketplaceSearchInput()) {
-    if (!input || !hasMarketplaceSearchMarker(input.value)) return;
-    setInputValue(input, cleanMarketplaceSearch(input.value));
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function setInputValue(input, value) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (setter) setter.call(input, value);
-    else input.value = value;
-  }
-
-  function findMarketplaceSearchInput() {
-    return Array.from(document.querySelectorAll("main input")).find((input) =>
-      /渠道名称|支持模型|search/i.test(String(input.placeholder || "")),
-    ) || null;
-  }
-
-  function applyVisiblePriceFilter() {
-    if (!location.pathname.startsWith("/marketplace/models/")) return;
-    const mode = currentPriceFilter();
-    for (const button of findChannelActionButtons()) {
-      const context = findChannelContext(button);
-      const channel = findActionButtonChannel(button);
-      const state = modelProviderFreeState(channel);
-      const hidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
-      if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
-    }
-  }
-
-  function findActionButtonChannel(button) {
-    if (isTriggerButton(button)) {
-      return { id: button.dataset.channelId || "", name: button.dataset.channelName || "" };
-    }
-    return findChannelFromButton(button);
-  }
-
-  function priceStateMatches(freeState, mode) {
-    return mode === "free" ? freeState === true : freeState === false;
-  }
-
-  function createTrigger(anchor, channel) {
-    const button = document.createElement("button");
-    button.type = "button"; button.textContent = "更新 API 密钥";
-    button.className = anchor.className || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-9 rounded-md px-4";
-    button.classList.add(TRIGGER_CLASS);
-    updateTriggerChannel(button, channel);
-    button.addEventListener("click", openDialog);
-    return button;
-  }
-
-  function findChannelContext(node) {
-    const fixed = node.closest('[data-slot="card"], tr, [role="row"]');
-    if (fixed) return fixed;
-    let current = node.parentElement;
-    while (current && current !== document.body) {
-      if (findChannelNameFromText(textBeforeButton(current, node))) return current;
-      current = current.parentElement;
-    }
-    return node.parentElement;
-  }
-
-  function findCardChannelName(node) { return node.closest('[data-slot="card"]')?.querySelector('[data-slot="card-title"]')?.textContent?.trim() || ""; }
-
-  function findChannelFromButton(node) {
-    const name = findVisibleChannelName(node);
-    const channel = findCachedChannel(name) || findDirectReactChannel(node) || {};
-    return {
-      id: channel.id ? String(channel.id) : "",
-      name: channel.name || name,
-    };
-  }
-
-  function findVisibleChannelName(node) {
-    return findCardChannelName(node) || findChannelNameFromText(findContextTextBeforeButton(findChannelContext(node), node));
-  }
-
-  function findContextTextBeforeButton(context, button) {
-    if (!context) return "";
-    return textBeforeButton(context, button);
-  }
-
-  function textBeforeButton(context, button) {
-    const text = [];
-    for (const current of Array.from(context.childNodes || context.children || [])) {
-      if (current === button || containsNode(current, button)) break;
-      const value = current.textContent?.trim();
-      if (value) text.push(value);
-    }
-    return text.join("\n");
-  }
-
-  function containsNode(parent, child) {
-    if (parent?.contains) return parent.contains(child);
-    let current = child?.parentElement;
-    while (current) {
-      if (current === parent) return true;
-      current = current.parentElement;
-    }
-    return false;
-  }
-
-  function findChannelNameFromText(text) {
-    const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
-    for (const line of lines) {
-      const channel = findCachedChannel(line);
-      if (channel) return channel.name;
-    }
-    return "";
-  }
+  return null;
+}
+
+function findChannelInFiber(fiber) {
+  let current = fiber;
+  for (let depth = 0; current && depth < REACT_FIBER_CHANNEL_LOOKUP_LIMIT; depth += 1, current = current.return) {
+    const channel = pickReactChannel(current.memoizedProps) || pickReactChannel(current.pendingProps);
+    if (channel) return channel;
+  }
+  return null;
+}
+
+function pickReactChannel(props) {
+  if (!props || typeof props !== "object" || Array.isArray(props)) return null;
+  if (isChannelObject(props)) return props;
+  for (const key of ["channel", "node", "data", "item", "row"]) {
+    if (isChannelObject(props[key])) return props[key];
+  }
+  return null;
+}
+
+function knownPayloadChannels(payload) {
+  const channels = [];
+  if (Array.isArray(payload?.items)) channels.push(...payload.items);
+  if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
+    channels.push(...payload.data.marketplaceModel.providers.map((provider) => provider?.channel).filter(Boolean));
+  }
+  if (Array.isArray(payload?.data?.channels?.edges)) {
+    channels.push(...payload.data.channels.edges.map((edge) => edge?.node).filter(Boolean));
+  }
+  if (payload?.data?.node) channels.push(payload.data.node);
+  return channels.filter(isChannelObject);
+}
 
   function findCachedChannel(name) {
     return channelNameCache.get(normalizeChannelName(name));
@@ -1157,37 +805,6 @@
     trigger.dataset.channelName = channel.name;
     if (channel.id) trigger.dataset.channelId = channel.id;
     else delete trigger.dataset.channelId;
-  }
-
-  function findDirectReactChannel(node) {
-    for (const key of Object.keys(node || {})) {
-      if (key.startsWith("__reactProps$")) {
-        const channel = pickReactChannel(node[key]);
-        if (channel) return channel;
-      } else if (key.startsWith("__reactFiber$")) {
-        const channel = findChannelInFiber(node[key]);
-        if (channel) return channel;
-      }
-    }
-    return null;
-  }
-
-  function findChannelInFiber(fiber) {
-    let current = fiber;
-    for (let depth = 0; current && depth < REACT_FIBER_CHANNEL_LOOKUP_LIMIT; depth += 1, current = current.return) {
-      const channel = pickReactChannel(current.memoizedProps) || pickReactChannel(current.pendingProps);
-      if (channel) return channel;
-    }
-    return null;
-  }
-
-  function pickReactChannel(props) {
-    if (!props || typeof props !== "object" || Array.isArray(props)) return null;
-    if (isChannelObject(props)) return props;
-    for (const key of ["channel", "node", "data", "item", "row"]) {
-      if (isChannelObject(props[key])) return props[key];
-    }
-    return null;
   }
 
   function isChannelObject(value) {
@@ -1216,19 +833,6 @@
     return changed;
   }
 
-  function knownPayloadChannels(payload) {
-    const channels = [];
-    if (Array.isArray(payload?.items)) channels.push(...payload.items);
-    if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
-      channels.push(...payload.data.marketplaceModel.providers.map((provider) => provider?.channel).filter(Boolean));
-    }
-    if (Array.isArray(payload?.data?.channels?.edges)) {
-      channels.push(...payload.data.channels.edges.map((edge) => edge?.node).filter(Boolean));
-    }
-    if (payload?.data?.node) channels.push(payload.data.node);
-    return channels.filter(isChannelObject);
-  }
-
   function rememberChannelList(channels) {
     let changed = false;
     for (const channel of channels || []) {
@@ -1247,8 +851,8 @@
       const providerModelID = provider?.modelID || modelID;
       const detail = channelFreeStateForModelDetail(channel, providerModelID);
       rememberImplicitFreeModelPageContext(channel, providerModelID, detail);
-      const state = detail.free;
-      for (const key of modelProviderCacheKeys(channel.id, modelID)) modelProviderPriceCache.set(key, state);
+      const cacheKey = modelProviderCacheKey(channel.id, modelID);
+      modelProviderPriceCache.set(cacheKey, detail.free);
     }
   }
 
@@ -1261,16 +865,6 @@
   function modelProviderCacheKey(channelID, modelID) {
     const numericID = extractNumericChannelID(channelID);
     return `${numericID || String(channelID || "")}:${normalizeModelID(modelID)}`;
-  }
-
-  function modelProviderCacheKeys(channelID, modelID) {
-    const keys = new Set([modelProviderCacheKey(channelID, modelID)]);
-    const numericID = extractNumericChannelID(channelID);
-    if (numericID) {
-      keys.add(`${numericID}:${normalizeModelID(modelID)}`);
-      keys.add(`gid://axonhub/channel/${numericID}:${normalizeModelID(modelID)}`);
-    }
-    return Array.from(keys);
   }
 
   function rememberChannel(channel) {
@@ -1289,8 +883,8 @@
       item.priceSummary ??= existing.priceSummary;
       if (existing.name === item.name
         && existing.type === item.type
-        && existing.supportedModels === item.supportedModels
-        && existing.priceSummary === item.priceSummary) return false;
+        && sameStringArray(existing.supportedModels, item.supportedModels)
+        && sameJsonValue(existing.priceSummary, item.priceSummary)) return false;
     }
     channelCache.set(item.id, item);
     const numericID = extractNumericChannelID(item.id);
@@ -1300,25 +894,1065 @@
   }
 
   function normalizeChannelName(name) {
-    return String(name || "").replace(/\s+/g, " ").trim();
+    return cleanText(name);
   }
+
+  function sameStringArray(left, right) {
+    if (left === right) return true;
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+  }
+
+  function sameJsonValue(left, right) {
+    if (left === right) return true;
+    if (left == null || right == null) return left == null && right == null;
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return false;
+    }
+  }
+
+const MARKETPLACE_CHANNEL_TAB_RE = /渠道广场|channel/i;
+const MARKETPLACE_CHANNELS_ROOT_RE = /渠道广场|按渠道名称|全部标签/i;
+const MARKETPLACE_TAGS_LABEL_RE = /^(标签|tags?)$/i;
+const MARKETPLACE_SORT_LABEL_RE = /^(排序|sort)$/i;
+const MARKETPLACE_HEALTH_LABEL_RE = /^(健康序列|health(?:\s+window|\s+sequence)?)$/i;
+const MARKETPLACE_VERIFICATION_ACTION_RE = /^(真伪核验|Authenticity\s+Check|Verify\s+Authenticity)$/i;
+const MARKETPLACE_SEARCH_PLACEHOLDER_RE = /渠道名称|支持模型|search/i;
+const REQUESTS_API_KEY_LABEL = "API密钥";
+const MARKETPLACE_FREE_SORT_TEXT = "倍率从低到高";
+const MARKETPLACE_DEFAULT_SORT_TEXT = "综合推荐";
+
+function openSelectLikeUser(trigger) {
+  dispatchPointerEvent(trigger, "pointerdown", 1);
+}
+
+function selectOptionLikeUser(option) {
+  dispatchPointerEvent(option, "pointermove", 1);
+  dispatchMouseEvent(option, "mousemove", 1);
+  dispatchPointerEvent(option, "pointerup", 0);
+  dispatchMouseEvent(option, "mouseup", 0);
+  dispatchMouseEvent(option, "click", 0);
+}
+
+function dispatchPointerEvent(element, type, buttons) {
+  const init = mouseEventInit(element, buttons);
+  const event = typeof PointerEvent === "function"
+    ? new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true })
+    : new MouseEvent(type, init);
+  element.dispatchEvent(event);
+}
+
+function dispatchMouseEvent(element, type, buttons) {
+  element.dispatchEvent(new MouseEvent(type, mouseEventInit(element, buttons)));
+}
+
+function mouseEventInit(element, buttons) {
+  const rect = element.getBoundingClientRect?.();
+  const clientX = rect ? rect.left + rect.width / 2 : 0;
+  const clientY = rect ? rect.top + rect.height / 2 : 0;
+  return {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    button: 0,
+    buttons,
+    clientX,
+    clientY,
+  };
+}
+
+function findApiKeyActionButtons() {
+  return Array.from(document.querySelectorAll("main button")).filter(isApiKeyActionButton);
+}
+
+function findChannelActionButtons() {
+  return Array.from(document.querySelectorAll("main button")).filter((button) =>
+    isApiKeyActionButton(button) || isTriggerButton(button),
+  );
+}
+
+function isApiKeyActionButton(node) {
+  return !isTriggerButton(node) && isApiKeyActionButtonText(node.textContent || "");
+}
+
+function isApiKeyActionButtonText(text) {
+  const normalizedText = cleanText(text);
+  return API_KEY_CREATE_ACTION_RE.test(normalizedText) || API_KEY_EXISTING_ACTION_RE.test(normalizedText);
+}
+
+function isExistingApiKeyActionButtonText(text) {
+  return API_KEY_EXISTING_ACTION_RE.test(cleanText(text));
+}
+
+function isTriggerButton(node) {
+  return Boolean(node?.classList?.contains(TRIGGER_CLASS));
+}
+
+function selectPreferredApiKeyActionButton(buttons) {
+  return buttons.find((button) => isExistingApiKeyActionButtonText(button.textContent || "")) || buttons[0] || null;
+}
+
+function replaceApiKeyActionButtons() {
+  const buttonsByContext = new Map();
+  for (const button of findApiKeyActionButtons()) {
+    const context = findChannelContext(button);
+    if (!context) continue;
+    const contextButtons = buttonsByContext.get(context) || [];
+    contextButtons.push(button);
+    buttonsByContext.set(context, contextButtons);
+  }
+
+  for (const [context, buttons] of buttonsByContext) {
+    const existingTrigger = context.querySelector?.(`.${TRIGGER_CLASS}`);
+    if (existingTrigger) {
+      buttons.forEach((button) => button.remove?.());
+      moveChannelTriggerToActionEnd(existingTrigger);
+      continue;
+    }
+
+    const anchor = selectPreferredApiKeyActionButton(buttons);
+    if (!anchor) continue;
+    const channel = findChannelFromButton(anchor);
+    if (!channel.id) continue;
+
+    buttons.forEach((button) => {
+      if (button !== anchor) button.remove?.();
+    });
+    replaceApiKeyActionButton(anchor, channel);
+  }
+}
+
+function removeMarketplaceVerificationButtons() {
+  if (!location.pathname.startsWith("/marketplace")) return;
+  for (const button of document.querySelectorAll("main button")) {
+    if (isMarketplaceVerificationButtonText(button.textContent || "")) button.remove?.();
+  }
+}
+
+function isMarketplaceVerificationButtonText(text) {
+  return MARKETPLACE_VERIFICATION_ACTION_RE.test(cleanText(text));
+}
+
+function replaceApiKeyActionButton(anchor, channel = findChannelFromButton(anchor)) {
+  if (!channel.id) return;
+  const trigger = createTrigger(channel);
+  anchor.replaceWith(trigger);
+  moveChannelTriggerToActionEnd(trigger);
+}
+
+function moveChannelTriggerToActionEnd(trigger) {
+  const actionContainer = trigger?.parentElement;
+  if (!actionContainer || actionContainer.lastElementChild === trigger) return;
+  actionContainer.append(trigger);
+}
+
+function createTrigger(channel) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `${TRIGGER_CLASS} ${CHANNEL_TRIGGER_CLASS}`;
+  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"></circle><path d="m11 12 9-9"></path><path d="m16 4 4 4"></path></svg><span>更新 API 密钥</span>`;
+  button.setAttribute("aria-label", `更新 ${channel.name || "当前渠道"} 的 API 密钥`);
+  updateTriggerChannel(button, channel);
+  button.addEventListener("click", openDialog);
+  return button;
+}
+
+function findChannelContext(node) {
+  const fixed = node.closest('[data-slot="card"], tr, [role="row"]');
+  if (fixed) return fixed;
+  let current = node.parentElement;
+  while (current && current !== document.body) {
+    if (findChannelNameFromText(textBeforeButton(current, node))) return current;
+    current = current.parentElement;
+  }
+  return node.parentElement;
+}
+
+function findCardChannelName(node) {
+  return node.closest('[data-slot="card"]')?.querySelector('[data-slot="card-title"]')?.textContent?.trim() || "";
+}
+
+function findChannelFromButton(node) {
+  const name = findVisibleChannelName(node);
+  const channel = findCachedChannel(name) || findDirectReactChannel(node) || {};
+  return {
+    id: channel.id ? String(channel.id) : "",
+    name: channel.name || name,
+  };
+}
+
+function findVisibleChannelName(node) {
+  return findCardChannelName(node) || findChannelNameFromText(findContextTextBeforeButton(findChannelContext(node), node));
+}
+
+function findContextTextBeforeButton(context, button) {
+  if (!context) return "";
+  return textBeforeButton(context, button);
+}
+
+function textBeforeButton(context, button) {
+  const text = [];
+  for (const current of Array.from(context.childNodes || context.children || [])) {
+    if (current === button || containsNode(current, button)) break;
+    const value = current.textContent?.trim();
+    if (value) text.push(value);
+  }
+  return text.join("\n");
+}
+
+function containsNode(parent, child) {
+  if (parent?.contains) return parent.contains(child);
+  let current = child?.parentElement;
+  while (current) {
+    if (current === parent) return true;
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function findChannelNameFromText(text) {
+  const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const channel = findCachedChannel(line);
+    if (channel) return channel.name;
+  }
+  return "";
+}
+
+function insertPriceFilter() {
+  if (!location.pathname.startsWith("/marketplace")) {
+    resetPriceFilterState();
+    removePriceFilterField();
+    return;
+  }
+  const anchors = findMarketplaceFilterFields();
+  if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
+    removePriceFilterField();
+    return;
+  }
+  const filterAnchor = anchors.health || anchors.sort || anchors.tags;
+  if (!filterAnchor) return;
+  let field = document.getElementById(PRICE_FIELD_ID);
+  if (!field) field = createPriceFilterField();
+  const previousParent = field.parentElement;
+  const filterGrid = movePriceFilterToEndOfGrid(filterAnchor, field);
+  if (!filterGrid) return;
+  if (previousParent && previousParent !== filterGrid) {
+    previousParent.classList?.remove?.("hkb-marketplace-filter-grid");
+  }
+  markMarketplaceFilterGrid(filterGrid);
+  cleanupMarketplaceSearchInput();
+  syncPriceFilterField(field);
+}
+
+function movePriceFilterToEndOfGrid(filterAnchor, priceFilterField) {
+  const filterGrid = filterAnchor?.parentElement;
+  if (!filterGrid) return null;
+  if (priceFilterField.parentElement !== filterGrid || filterGrid.lastElementChild !== priceFilterField) {
+    filterGrid.append(priceFilterField);
+  }
+  return filterGrid;
+}
+
+function removePriceFilterField() {
+  const field = document.getElementById(PRICE_FIELD_ID);
+  const parent = field?.parentElement;
+  field?.remove?.();
+  parent?.classList?.remove?.("hkb-marketplace-filter-grid");
+  document.querySelectorAll?.(".hkb-marketplace-filter-grid")?.forEach?.((grid) => {
+    grid.classList?.remove?.("hkb-marketplace-filter-grid");
+  });
+}
+
+function markMarketplaceFilterGrid(activeGrid) {
+  document.querySelectorAll?.(".hkb-marketplace-filter-grid")?.forEach?.((grid) => {
+    if (grid !== activeGrid) grid.classList?.remove?.("hkb-marketplace-filter-grid");
+  });
+  activeGrid?.classList?.add?.("hkb-marketplace-filter-grid");
+}
+
+function isMarketplaceChannelsTabActive() {
+  if (!location.pathname.startsWith("/marketplace")) return false;
+  const root = document.querySelector("main") || document;
+  const selected = root.querySelector('[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]');
+  return !selected || MARKETPLACE_CHANNEL_TAB_RE.test(String(selected.textContent || ""));
+}
+
+function findMarketplaceFilterFields(fields = Array.from(marketplaceChannelsRoot().querySelectorAll("label, p, div, span"))) {
+  return {
+    tags: filterFieldByLabel(fields, MARKETPLACE_TAGS_LABEL_RE),
+    sort: filterFieldByLabel(fields, MARKETPLACE_SORT_LABEL_RE),
+    health: filterFieldByLabel(fields, MARKETPLACE_HEALTH_LABEL_RE),
+  };
+}
+
+function marketplaceChannelsRoot() {
+  const main = document.querySelector("main") || document;
+  const panels = Array.from(main.querySelectorAll?.('[role="tabpanel"], [data-slot="tabs-content"]') || []);
+  return panels.find((panel) => isElementVisible(panel) && MARKETPLACE_CHANNELS_ROOT_RE.test(String(panel.textContent || ""))) || main;
+}
+
+function filterFieldByLabel(elements, pattern) {
+  for (const label of elements) {
+    if (!isFilterLabelText(label.textContent, pattern)) continue;
+    const field = closestFilterField(label);
+    if (hasFilterControl(field)) return field;
+  }
+  return null;
+}
+
+function isFilterLabelText(text, pattern) {
+  const normalized = cleanText(text);
+  return normalized.length <= 24 && pattern.test(normalized);
+}
+
+function closestFilterField(label) {
+  let current = label;
+  while (current && current !== document.body) {
+    if (hasFilterControl(current)) return current;
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function hasFilterControl(field) {
+  return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
+}
+
+function createPriceFilterField() {
+  const field = document.createElement("div");
+  field.id = PRICE_FIELD_ID;
+  field.className = "space-y-1";
+  field.dataset.hubToolPriceFilter = "true";
+  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">价格</p>
+    <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
+  field.addEventListener("click", handlePriceFilterClick);
+  return field;
+}
+
+function syncPriceFilterField(field) {
+  if (!field) return;
+  const price = currentPriceFilter();
+  field.querySelectorAll("[data-price]").forEach((button) => {
+    const selected = button.dataset.price === price;
+    button.setAttribute("aria-pressed", String(selected));
+  });
+}
+
+function handlePriceFilterClick(event) {
+  const button = event.target?.closest?.("[data-price]");
+  if (!button) return;
+  setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
+}
+
+function setPriceFilter(value) {
+  const price = normalizePriceFilter(value);
+  if (price === selectedPriceFilter) return;
+  selectedPriceFilter = price;
+  syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
+  applyVisiblePriceFilter();
+  triggerMarketplaceRefresh();
+}
+
+function cleanupLegacyPriceParam() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has("price")) return;
+  url.searchParams.delete("price");
+  history.replaceState(history.state, "", url);
+}
+
+function triggerMarketplaceRefresh() {
+  if (location.pathname.startsWith("/marketplace/models/")) {
+    scheduleRouteScans();
+    return;
+  }
+  const targetSort = currentPriceFilter() === "free" ? MARKETPLACE_FREE_SORT_TEXT : MARKETPLACE_DEFAULT_SORT_TEXT;
+  if (triggerMarketplaceSortRefresh(targetSort)) return;
+  scheduleRouteScans();
+}
+
+function triggerMarketplaceSortRefresh(targetText) {
+  const trigger = findMarketplaceSortTrigger();
+  if (!trigger) return false;
+  const fetchStartedAt = lastMarketplaceChannelsFetchAt;
+  openSelectLikeUser(trigger);
+  setTimeout(() => {
+    const option = findVisibleOptionByText(targetText);
+    if (option) selectOptionLikeUser(option);
+  }, 0);
+  setTimeout(() => {
+    if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
+  }, 260);
+  return true;
+}
+
+function resetPriceFilterState() {
+  if (selectedPriceFilter === "all") return;
+  selectedPriceFilter = "all";
+  applyVisiblePriceFilter();
+}
+
+function findMarketplaceSortTrigger() {
+  const anchors = findMarketplaceFilterFields();
+  return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
+}
+
+function findVisibleOptionByText(text) {
+  return Array.from(document.querySelectorAll('[role="option"]')).find((option) =>
+    cleanText(option.textContent) === text && isElementVisible(option),
+  ) || null;
+}
+
+function isElementVisible(element) {
+  return Boolean(element?.offsetParent || element?.getClientRects?.().length);
+}
+
+function cleanupMarketplaceSearchInput(input = findMarketplaceSearchInput()) {
+  if (!input || !hasMarketplaceSearchMarker(input.value)) return;
+  setInputValue(input, cleanMarketplaceSearch(input.value));
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setInputValue(input, value) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setter) setter.call(input, value);
+  else input.value = value;
+}
+
+function findMarketplaceSearchInput() {
+  return Array.from(document.querySelectorAll("main input")).find((input) =>
+    MARKETPLACE_SEARCH_PLACEHOLDER_RE.test(String(input.placeholder || "")),
+  ) || null;
+}
+
+function applyVisiblePriceFilter() {
+  if (!location.pathname.startsWith("/marketplace/models/")) return;
+  const mode = currentPriceFilter();
+  for (const button of findChannelActionButtons()) {
+    const context = findChannelContext(button);
+    const channel = findActionButtonChannel(button);
+    const state = modelProviderFreeState(channel);
+    const hidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+    if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
+  }
+}
+
+function findActionButtonChannel(button) {
+  if (isTriggerButton(button)) {
+    return { id: button.dataset.channelId || "", name: button.dataset.channelName || "" };
+  }
+  return findChannelFromButton(button);
+}
+
+function insertRequestTriggers() {
+  if (!isRequestsConsumerRoute()) {
+    document.querySelectorAll(`.${REQUEST_TRIGGER_CLASS}`).forEach((button) => button.remove?.());
+    return;
+  }
+  const apiKeyButton = findRequestsApiKeyFilterButton();
+  const host = apiKeyButton?.parentElement;
+  if (!apiKeyButton || !host || host.querySelector?.(`.${REQUEST_TRIGGER_CLASS}`)) return;
+  apiKeyButton.insertAdjacentElement("afterend", createRequestEditTrigger(apiKeyButton));
+}
+
+function isRequestsConsumerRoute() {
+  if (!location.pathname.startsWith("/project/requests")) return false;
+  const view = new URLSearchParams(location.search || "").get("view");
+  return !view || view === "consumer";
+}
+
+function findRequestsApiKeyFilterButton() {
+  return Array.from(document.querySelectorAll("main button"))
+    .find((button) => cleanText(button.textContent) === REQUESTS_API_KEY_LABEL);
+}
+
+function createRequestEditTrigger(anchor) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "更新 API 密钥";
+  button.className = anchor.className
+    || "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium border bg-background h-8 rounded-md px-3";
+  button.classList.add(TRIGGER_CLASS, REQUEST_TRIGGER_CLASS);
+  button.addEventListener("click", openRequestEditDialog);
+  return button;
+}
+
+function ensurePanel() {
+  injectStyle();
+  replaceApiKeyActionButtons();
+  removeMarketplaceVerificationButtons();
+  insertRequestTriggers();
+  insertPriceFilter();
+  applyVisiblePriceFilter();
+}
+
+function schedulePanel() {
+  if (!isTargetRoute()) return;
+  if (mountTimer) return;
+  mountTimer = requestFrame(() => {
+    mountTimer = 0;
+    ensurePanel();
+  });
+}
+
+function requestFrame(callback) {
+  return typeof requestAnimationFrame === "function" ? requestAnimationFrame(callback) : setTimeout(callback, 16);
+}
+
+function isTargetRoute(pathname = location.pathname) {
+  return pathname.startsWith("/marketplace")
+    || pathname.startsWith("/project/api-keys")
+    || pathname.startsWith("/project/requests");
+}
+
+function handleRouteChange() {
+  const route = `${location.pathname}${location.search || ""}`;
+  if (lastPathname === route) return;
+  lastPathname = route;
+  scheduleRouteScans();
+}
+
+function scheduleRouteScans() {
+  if (!isTargetRoute()) return;
+  schedulePanel();
+  setTimeout(schedulePanel, 120);
+  setTimeout(schedulePanel, 360);
+}
+
+function buildProfilesInput(profilesPayload, channelID, mode = "replace") {
+  const targetIDs = mode === "append"
+    ? uniqueChannelIDs([...currentProfileChannelIDs(profilesPayload), channelID])
+    : [channelID];
+  return buildProfilesInputWithChannelIDs(profilesPayload, targetIDs);
+}
+
+function buildProfilesInputWithChannelIDs(profilesPayload, channelIDs) {
+  const activeProfile = profilesPayload.activeProfile || "default";
+  const profiles = Array.isArray(profilesPayload.profiles) && profilesPayload.profiles.length
+    ? profilesPayload.profiles.map((profile) => ({ ...profile }))
+    : [{ name: activeProfile }];
+  const target = profiles.find((profile) => profile.name === activeProfile) || profiles[0];
+  target.name = target.name || activeProfile;
+  target.channelIDs = uniqueChannelIDs(channelIDs);
+  target.channelTags = Array.isArray(target.channelTags) ? target.channelTags : [];
+  target.channelTagsMatchMode = target.channelTagsMatchMode || "any";
+  target.modelMappings = Array.isArray(target.modelMappings) ? target.modelMappings : [];
+  target.modelIDs = Array.isArray(target.modelIDs) ? target.modelIDs : [];
+  target.channelBindingMode = "manual";
+  target.dynamicChannelStrategy = null;
+  return { activeProfile, profiles };
+}
+
+function getActiveProfile(profilesPayload) {
+  const activeProfile = profilesPayload?.activeProfile || "default";
+  const profiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
+  return profiles.find((profile) => profile.name === activeProfile) || profiles[0] || {};
+}
+
+function currentProfileChannelIDs(profilesPayload) {
+  return uniqueChannelIDs(getActiveProfile(profilesPayload).channelIDs || []);
+}
+
+function uniqueChannelIDs(channelIDs) {
+  const ids = [];
+  const seen = new Set();
+  for (const id of channelIDs || []) {
+    const numericID = extractNumericChannelID(id);
+    if (!numericID || seen.has(numericID)) continue;
+    seen.add(numericID);
+    ids.push(numericID);
+  }
+  return ids;
+}
+
+function moveChannelIDToIndex(channelIDs, channelID, targetIndex) {
+  const numericID = extractNumericChannelID(channelID);
+  const currentIndex = channelIDs.indexOf(numericID);
+  const nextIndex = Math.max(0, Math.min(channelIDs.length - 1, Number(targetIndex) || 0));
+  if (!numericID || currentIndex < 0 || currentIndex === nextIndex) return channelIDs;
+  const nextIDs = [...channelIDs];
+  const [item] = nextIDs.splice(currentIndex, 1);
+  nextIDs.splice(nextIndex, 0, item);
+  return nextIDs;
+}
+
+async function loadMissingChannelNames(channelIDs) {
+  const missingIDs = uniqueChannelIDs(channelIDs)
+    .filter((id) => !channelCache.has(String(id)))
+    .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
+  const results = await Promise.all(missingIDs.map((id) => loadChannelName(id).catch(() => null)));
+  return results.filter(Boolean).length;
+}
+
+async function loadChannelName(channelID) {
+  const numericID = extractNumericChannelID(channelID);
+  if (!numericID) return null;
+  if (channelCache.has(String(numericID))) return channelCache.get(String(numericID));
+  if (channelNameRequestCache.has(numericID)) return channelNameRequestCache.get(numericID);
+  const request = graphql(
+    queries.getChannelName,
+    { id: `gid://axonhub/Channel/${numericID}` },
+    "GetChannelName",
+  ).then((data) => {
+    const channel = data?.node;
+    if (channel?.id && channel?.name) {
+      rememberChannel(channel);
+      return channelCache.get(String(numericID)) || channel;
+    }
+    return null;
+  }).finally(() => {
+    channelNameRequestCache.delete(numericID);
+  });
+  channelNameRequestCache.set(numericID, request);
+  return request;
+}
+
+async function loadMe() {
+  if (meCache) return meCache;
+  const data = await graphql(queries.me, {}, "Me");
+  meCache = data.me;
+  return meCache;
+}
+
+async function loadKeys(force = false) {
+  if (keysCache.length && !force) {
+    renderKeyOptions();
+    return keysCache;
+  }
+  setStatus("正在加载 API Key");
+  const userID = (await loadMe())?.id;
+  if (!userID) throw new Error("未读取到当前用户 ID");
+  const keys = [];
+  let after = null;
+  do {
+    const data = await graphql(queries.getKeys, {
+      first: 100,
+      after,
+      where: { statusIn: ["enabled", "disabled"], userID, typeNotIn: ["noauth"] },
+      orderBy: { field: "CREATED_AT", direction: "DESC" },
+    }, "GetApiKeys");
+    const page = data.apiKeys;
+    keys.push(...(page?.edges || []).map((edge) => edge.node).filter(Boolean));
+    after = page?.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (after);
+  keysCache = keys;
+  renderKeyOptions();
+  setStatus(keys.length ? "" : "没有可用 API Key");
+  return keys;
+}
+
+async function createKey(name) {
+  const data = await graphql(queries.createKey, { input: { name, type: "user", projectID: graphqlHeaders.projectID } }, "CreateAPIKey");
+  return data.createAPIKey;
+}
+
+function renderKeyOptions() {
+  if (!keysCache.some((key) => key.id === selectedKeyID)) selectedKeyID = keysCache[0]?.id || "";
+  document.querySelectorAll(`#${DIALOG_ID} [data-role="key-menu"], #${DIALOG_ID} [data-role="edit-key-menu"]`).forEach((menu) => {
+    menu.innerHTML = keysCache.length
+      ? keysCache.map((key) => `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}" role="option" aria-selected="${String(key.id === selectedKeyID)}"><span>${escapeHtml(keyLabel(key))}</span></button></li>`).join("")
+      : `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="" role="option" disabled>暂无 API Key</button></li>`;
+  });
+  syncKeyPicker();
+}
+
+function keyLabel(key) {
+  return String(key?.name || key?.id || "未命名 API Key");
+}
+
+function selectKey(keyID) {
+  if (!keyID || !keysCache.some((key) => key.id === keyID)) return;
+  selectedKeyID = keyID;
+  syncKeyPicker();
+}
+
+function syncKeyPicker() {
+  const current = keysCache.find((key) => key.id === selectedKeyID);
+  document.querySelectorAll(`#${DIALOG_ID} [data-role="key-label"], #${DIALOG_ID} [data-role="edit-key-label"]`).forEach((label) => {
+    label.textContent = current ? keyLabel(current) : "暂无 API Key";
+  });
+  document.querySelectorAll(`#${DIALOG_ID} [data-role="key-trigger"], #${DIALOG_ID} [data-role="edit-key-trigger"]`).forEach((trigger) => {
+    trigger.disabled = !keysCache.length;
+  });
+  document.querySelectorAll(`#${DIALOG_ID} [data-action="select-key"]`).forEach((option) => {
+    option.setAttribute("aria-selected", String(option.dataset.keyId === selectedKeyID));
+  });
+}
+
+function toggleKeyMenu() {
+  const scope = currentViewPanel() === "edit" ? "edit-" : "";
+  const trigger = document.querySelector(`#${DIALOG_ID} [data-role="${scope}key-trigger"]`);
+  const menu = document.querySelector(`#${DIALOG_ID} [data-role="${scope}key-menu"]`);
+  if (!trigger || !menu || !keysCache.length) return;
+  const open = menu.hidden;
+  closeKeyMenu();
+  menu.hidden = !open;
+  trigger.setAttribute("aria-expanded", String(open));
+}
+
+function closeKeyMenu() {
+  document.querySelectorAll(`#${DIALOG_ID} [data-role="key-menu"], #${DIALOG_ID} [data-role="edit-key-menu"]`).forEach((menu) => {
+    menu.hidden = true;
+  });
+  document.querySelectorAll(`#${DIALOG_ID} [data-role="key-trigger"], #${DIALOG_ID} [data-role="edit-key-trigger"]`).forEach((trigger) => {
+    trigger.setAttribute("aria-expanded", "false");
+  });
+}
+
+const EDIT_CHANNEL_ROW_STEP = 40;
+
+function addCurrentChannelToEditList() {
+  const numericID = extractNumericChannelID(currentChannelID());
+  if (!numericID) throw new Error("无当前渠道");
+  if (editChannelIDs.includes(numericID)) {
+    setEditStatus("已存在");
+    return;
+  }
+  editChannelIDs = [...editChannelIDs, numericID];
+  renderEditChannelList();
+  setEditDirty(true);
+  setEditStatus("已添加");
+}
+
+function removeEditChannel(channelID) {
+  const numericID = extractNumericChannelID(channelID);
+  if (!numericID) {
+    setEditStatus("渠道 ID 无效");
+    return;
+  }
+  editChannelIDs = editChannelIDs.filter((id) => id !== numericID);
+  renderEditChannelList();
+  setEditDirty(true);
+  setEditStatus("已移除");
+}
+
+function clampEditChannelIndex(index) {
+  return Math.max(0, Math.min(editChannelIDs.length - 1, index));
+}
+
+function handleEditChannelDragStart(event) {
+  const handle = event.target?.closest?.('[data-action="edit-drag-channel"]');
+  if (!handle) return;
+  const numericID = extractNumericChannelID(handle.dataset.channelId || "");
+  const currentIndex = editChannelIDs.indexOf(numericID);
+  const list = handle.closest?.('[data-role="edit-channel-list"]');
+  if (!numericID || currentIndex < 0 || !list) return;
+  const listRect = list.getBoundingClientRect();
+  const rowRect = handle.closest?.(".hkb-channel-row")?.getBoundingClientRect?.();
+  event.preventDefault();
+  event.stopPropagation();
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+  editDragState = {
+    channelID: numericID,
+    pointerID: event.pointerId,
+    pointerY: event.clientY,
+    listTop: listRect.top,
+    scrollTop: list.scrollTop || 0,
+    grabOffsetY: event.clientY - (rowRect?.top || (listRect.top + currentIndex * EDIT_CHANNEL_ROW_STEP)),
+    targetIndex: currentIndex,
+  };
+  renderEditChannelList();
+  setEditStatus("");
+}
+
+function handleEditChannelDragMove(event) {
+  if (!editDragState || editDragState.pointerID !== event.pointerId) return;
+  const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
+  if (!list || !editChannelIDs.length) return;
+  const listRect = list.getBoundingClientRect();
+  const edge = 34;
+  if (event.clientY - listRect.top < edge) list.scrollTop = Math.max(0, (list.scrollTop || 0) - 4.3);
+  else if (listRect.bottom - event.clientY < edge) list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + 4.3);
+  const scrollTop = list.scrollTop || 0;
+  const contentY = event.clientY - listRect.top + scrollTop;
+  editDragState = {
+    ...editDragState,
+    pointerY: event.clientY,
+    listTop: listRect.top,
+    scrollTop,
+    targetIndex: clampEditChannelIndex(Math.floor(contentY / EDIT_CHANNEL_ROW_STEP)),
+  };
+  event.preventDefault();
+  renderEditChannelList();
+}
+
+function handleEditChannelDragEnd(event) {
+  if (!editDragState || editDragState.pointerID !== event.pointerId) return;
+  const nextIDs = moveChannelIDToIndex(editChannelIDs, editDragState.channelID, editDragState.targetIndex);
+  const changed = nextIDs !== editChannelIDs;
+  editChannelIDs = nextIDs;
+  editDragState = null;
+  event.currentTarget?.releasePointerCapture?.(event.pointerId);
+  renderEditChannelList();
+  if (changed) setEditDirty(true);
+  setEditStatus(changed ? "已调整" : "");
+}
+
+function cancelEditChannelDrag(event) {
+  if (!editDragState || (event?.pointerId != null && editDragState.pointerID !== event.pointerId)) return;
+  editDragState = null;
+  renderEditChannelList();
+  setEditStatus("");
+}
+
+function renderEditChannelList() {
+  const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
+  if (!list) return;
+  if (!editChannelIDs.length) {
+    editDragState = null;
+    list.innerHTML = `<div class="hkb-empty">暂无绑定渠道</div>`;
+    return;
+  }
+  list.innerHTML = renderEditChannelStage();
+}
+
+function renderEditChannelStage() {
+  const dragIndex = editDragState ? editChannelIDs.indexOf(editDragState.channelID) : -1;
+  const dragChannelID = dragIndex >= 0 ? editDragState.channelID : null;
+  const targetIndex = dragChannelID ? clampEditChannelIndex(editDragState.targetIndex) : -1;
+  const visibleIDs = dragChannelID ? editChannelIDs.filter((id) => id !== dragChannelID) : editChannelIDs;
+  const slots = visibleIDs.map((id, visibleIndex) => {
+    const displayIndex = dragChannelID && visibleIndex >= targetIndex ? visibleIndex + 1 : visibleIndex;
+    return `<div class="hkb-channel-slot" style="top:${displayIndex * EDIT_CHANNEL_ROW_STEP}px">${renderEditChannelRow(id)}</div>`;
+  }).join("");
+  const placeholder = dragChannelID
+    ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:36px"></div>`
+    : "";
+  const dragTop = dragChannelID
+    ? Math.max(0, Math.min((editChannelIDs.length - 1) * EDIT_CHANNEL_ROW_STEP, editDragState.pointerY - editDragState.listTop + editDragState.scrollTop - editDragState.grabOffsetY))
+    : 0;
+  const dragging = dragChannelID
+    ? `<div class="hkb-channel-slot" style="top:${dragTop}px;z-index:2;transition:none">${renderEditChannelRow(dragChannelID, { dragging: true })}</div>`
+    : "";
+  return `<div class="hkb-channel-list-stage" style="height:${editChannelIDs.length * EDIT_CHANNEL_ROW_STEP}px">${slots}${placeholder}${dragging}</div>`;
+}
+
+function renderEditChannelRow(channelID, options = {}) {
+  const safeID = escapeHtml(channelID);
+  const rowClass = options.dragging ? "hkb-channel-row is-dragging" : "hkb-channel-row";
+  return `<div class="${rowClass}" data-channel-id="${safeID}">
+    <button type="button" class="hkb-drag-handle" data-action="edit-drag-channel" data-channel-id="${safeID}" title="拖动排序" aria-label="拖动排序">::</button>
+    <span class="hkb-channel-name">${escapeHtml(channelLabel(channelID))}</span>
+    <span class="hkb-channel-actions">
+      <button type="button" class="hkb-icon-btn hkb-row-btn hkb-remove" data-action="edit-remove-channel" data-channel-id="${safeID}" title="移除" aria-label="移除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button>
+    </span>
+  </div>`;
+}
+
+function channelLabel(channelID) {
+  const id = String(channelID || "");
+  const channel = channelCache.get(id) || channelCache.get(String(extractNumericChannelID(id) || ""));
+  return channel?.name || (id ? `Channel #${extractNumericChannelID(id) || id}` : "未读取到当前渠道");
+}
+
+function setEditStatus(message) {
+  const status = document.querySelector(`#${DIALOG_ID} [data-role="edit-status"]`);
+  if (status) status.textContent = message;
+}
+
+function setEditDirty(isDirty) {
+  editDirty = Boolean(isDirty);
+  const saveButton = document.querySelector(`#${DIALOG_ID} [data-action="save-edit"]`);
+  if (saveButton) saveButton.dataset.dirty = String(editDirty);
+}
+
+function markScrolling(node) {
+  node.classList.add("is-scrolling");
+  clearTimeout(node.__hkbScrollTimer);
+  node.__hkbScrollTimer = setTimeout(() => node.classList.remove("is-scrolling"), 700);
+}
+
+async function updateExistingKeyBinding(mode) {
+  const result = await bindChannelToKey(selectedKeyID, currentChannelID(), mode);
+  if (mode === "append" && result.alreadyBound) setStatus("当前渠道已在选中 Key 的绑定列表中");
+  else setStatus(mode === "replace" ? "已替换选中 Key 的渠道绑定" : "已追加当前渠道到选中 Key");
+}
+
+async function createKeyAndBind() {
+  const name = getValue("new-key-name").trim();
+  if (!name) throw new Error("请先填写新 Key 名称");
+  const key = await createKey(name);
+  await bindChannelToKey(key.id, currentChannelID(), "replace");
+  await loadKeys(true);
+  setCreatedKeyValue(apiKeyValue(key));
+  setStatus(`已新建并绑定：${key.name || name}`);
+}
+
+async function bindChannelToKey(keyID, channelID, mode = "replace") {
+  if (!keyID) throw new Error("请选择 API Key");
+  if (!channelID) throw new Error("请选择渠道");
+  setStatus("正在读取当前 Key 配置");
+  const data = await graphql(queries.getKey, { id: keyID }, "GetApiKey");
+  const numericChannelID = extractNumericChannelID(channelID);
+  if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
+  if (!numericChannelID) throw new Error(`渠道 ID 无效：${channelID}`);
+  setStatus("正在写入渠道绑定");
+  const input = buildProfilesInput(data.node.profiles, numericChannelID, mode);
+  await graphql(queries.updateProfiles, { id: keyID, input }, "UpdateAPIKeyProfiles");
+  return { alreadyBound: mode === "append" && getActiveProfile(data.node.profiles).channelIDs?.includes(numericChannelID) };
+}
+
+function setCurrentChannel(channel, options = {}) {
+  const dialog = document.getElementById(DIALOG_ID);
+  if (!dialog) return;
+  dialog.dataset.channelId = channel.id || "";
+  dialog.dataset.channelName = channel.name || "";
+  const label = document.querySelector(`#${DIALOG_ID} [data-role="channel-label"]`);
+  if (label) label.textContent = channel.name || (options.allowEmpty ? "未指定" : "未读取到当前渠道");
+  setStatus(channel.id || options.allowEmpty ? "" : "未读取到渠道 ID，请刷新重试");
+}
+
+function currentChannelID() {
+  const channelID = document.getElementById(DIALOG_ID)?.dataset?.channelId || "";
+  if (!channelID) throw new Error("无当前渠道");
+  return channelID;
+}
+
+async function openEditPanel() {
+  if (!selectedKeyID) throw new Error("请先选择 API Key");
+  const dialog = document.getElementById(DIALOG_ID);
+  if (!dialog) return;
+  const channelID = dialog.dataset.channelId || "";
+  showEditPanel();
+  setEditDirty(false);
+  setEditStatus("加载中");
+  const channelLabelElement = dialog.querySelector("[data-role='edit-channel-label']");
+  if (channelLabelElement) channelLabelElement.textContent = channelID ? channelLabel(channelID) : "未指定";
+  syncKeyPicker();
+  const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
+  if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
+  editChannelIDs = currentProfileChannelIDs(data.node.profiles);
+  renderEditChannelList();
+  const loadToken = ++editLoadToken;
+  loadMissingChannelNames(editChannelIDs).then((loaded) => {
+    if (loaded && loadToken === editLoadToken && currentViewPanel() === "edit") renderEditChannelList();
+  }).catch(() => {});
+  setEditStatus("");
+}
+
+function showEditPanel() {
+  closeKeyMenu();
+  showViewPanel("edit");
+}
+
+function showMainPanel() {
+  editChannelIDs = [];
+  editLoadToken += 1;
+  setEditDirty(false);
+  showViewPanel("main");
+  setEditStatus("");
+}
+
+function showViewPanel(view) {
+  document.querySelectorAll(`#${DIALOG_ID} [data-view-panel]`).forEach((panel) => {
+    panel.hidden = panel.dataset.viewPanel !== view;
+  });
+}
+
+function currentViewPanel() {
+  return document.querySelector(`#${DIALOG_ID} [data-view-panel]:not([hidden])`)?.dataset?.viewPanel || "main";
+}
+
+async function saveEditBindings() {
+  if (!selectedKeyID) throw new Error("请先选择 API Key");
+  setEditStatus("保存中");
+  const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
+  if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
+  const input = buildProfilesInputWithChannelIDs(data.node.profiles, editChannelIDs);
+  await graphql(queries.updateProfiles, { id: selectedKeyID, input }, "UpdateAPIKeyProfiles");
+  setEditDirty(false);
+  setEditStatus("已保存");
+}
+
+function apiKeyValue(key) {
+  return String(key?.key || "");
+}
+
+function setCreatedKeyValue(value) {
+  createdKeyValueCache = String(value || "");
+  syncActionButtons();
+}
+
+async function copyCreatedKey() {
+  const value = createdKeyValue();
+  if (!value) throw new Error("没有可复制的 API Key");
+  await navigator.clipboard.writeText(value);
+  setStatus("已复制新 API Key");
+}
+
+function createdKeyValue() {
+  return createdKeyValueCache;
+}
+
+function syncActionButtons() {
+  const dialog = document.getElementById(DIALOG_ID);
+  const selectedMode = dialog?.dataset?.keyMode || "update";
+  const actions = dialog?.querySelector(".hkb-actions");
+  if (!actions) return;
+  actions.querySelectorAll("[data-action-panel]").forEach((element) => {
+    const isCopyCreated = element.dataset.role === "copy-created-key";
+    const hasCreatedKey = Boolean(createdKeyValue());
+    const isCreateBind = element.dataset.action === "create-bind";
+    element.hidden = element.dataset.actionPanel !== selectedMode
+      || (isCopyCreated && !hasCreatedKey)
+      || (isCreateBind && hasCreatedKey);
+  });
+}
+
+async function copySelectedKey() {
+  const keyID = selectedKeyID;
+  if (!keyID) throw new Error("请先选择 API Key");
+  const data = await graphql(queries.getKeyValue, { id: keyID }, "GetApiKeyValue");
+  const value = data?.node?.key;
+  if (!value) throw new Error("该 Key 无可复制的密钥值");
+  await navigator.clipboard.writeText(value);
+  setStatus("已复制密钥");
+}
+
+function getValue(role) {
+  return document.querySelector(`#${DIALOG_ID} [data-role="${role}"]`)?.value || "";
+}
+
+function setStatus(message) {
+  const status = document.querySelector(`#${DIALOG_ID} [data-role="status"]`);
+  if (status) status.textContent = message;
+}
+
+function setBusy(isBusy) {
+  document.querySelectorAll(`#${DIALOG_ID} button`).forEach((button) => {
+    button.disabled = isBusy;
+  });
+  if (!isBusy) syncKeyPicker();
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(HTML_ESCAPE_RE, (character) => HTML_ESCAPE_MAP[character]);
+}
 
   function injectStyle() {
     if (document.getElementById(`${PANEL_ID}-style`)) return;
     const style = document.createElement("style"); style.id = `${PANEL_ID}-style`;
-    style.textContent = `.${TRIGGER_CLASS}{margin-left:4px}
-      .hkb-sort-anchor{position:relative}
-      .hkb-price-filter-row{position:relative;overflow:visible}
-      #${PRICE_FIELD_ID}{box-sizing:border-box;position:absolute;left:var(--hkb-price-left,calc(100% + 12px));top:var(--hkb-price-top,0px);z-index:1;display:flex;align-items:center;height:36px}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;min-height:36px;border:1px solid var(--input,hsl(20 5.9% 90%));border-radius:12px;background:color-mix(in oklab,var(--input,hsl(20 5.9% 90%)) 12%,transparent);color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 2px 0 rgb(0 0 0 / .05);transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+    style.textContent = `.${REQUEST_TRIGGER_CLASS}{margin-left:4px}
+      .${CHANNEL_TRIGGER_CLASS}{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;min-height:28px;border:1px solid color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 24%,var(--border,hsl(20 5.9% 90%)));border-radius:8px;background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 7%,transparent);color:var(--primary,hsl(20 14.3% 4.1%));padding:0 10px;font:inherit;font-size:12px;font-weight:600;line-height:18px;white-space:nowrap;cursor:pointer;box-shadow:none;transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+      .${CHANNEL_TRIGGER_CLASS}:hover{border-color:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 42%,var(--border,hsl(20 5.9% 90%)));background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 13%,transparent)}
+      .${CHANNEL_TRIGGER_CLASS}:focus-visible{outline:none;border-color:var(--ring,var(--primary,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--primary,hsl(20 14.3% 4.1%))) 22%,transparent)}
+      .${CHANNEL_TRIGGER_CLASS} svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+      html.dark .${CHANNEL_TRIGGER_CLASS}{border-color:color-mix(in oklab,var(--primary) 34%,var(--border));background:color-mix(in oklab,var(--primary) 12%,transparent);color:color-mix(in oklab,var(--primary) 82%,white)}
+      html.dark .${CHANNEL_TRIGGER_CLASS}:hover{border-color:color-mix(in oklab,var(--primary) 52%,var(--border));background:color-mix(in oklab,var(--primary) 20%,transparent)}
+      #${PRICE_FIELD_ID}{box-sizing:border-box;min-width:0;order:2147483647}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:fit-content;max-width:100%;height:32px;min-height:32px;border:1px solid var(--border,hsl(20 5.9% 90%));border-radius:999px;background:transparent;color:var(--muted-foreground,hsl(25 5.3% 44.7%));padding:5px 12px;font:inherit;font-size:13px;font-weight:500;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:none;transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{border-color:color-mix(in oklab,var(--foreground,hsl(20 14.3% 4.1%)) 28%,var(--border,hsl(20 5.9% 90%)));background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}
       #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:var(--ring,var(--foreground,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--foreground,hsl(20 14.3% 4.1%))) 24%,transparent)}
-      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:var(--primary,hsl(20 14.3% 4.1%));background:var(--primary,hsl(20 14.3% 4.1%));color:var(--primary-foreground,hsl(60 9.1% 97.8%))}
-      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]{background:color-mix(in oklab,var(--input) 30%,transparent);box-shadow:0 1px 3px 0 rgb(0 0 0 / .3)}
+      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 32%,transparent);background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 10%,transparent);color:var(--primary,hsl(20 14.3% 4.1%));box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 8%,transparent)}
+      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]{background:transparent;box-shadow:none}
       html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:color-mix(in oklab,var(--accent) 70%,transparent)}
       html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklab,var(--ring) 35%,transparent)}
-      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:var(--primary);background:var(--primary);color:var(--primary-foreground)}
+      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--primary) 48%,transparent);background:color-mix(in oklab,var(--primary) 16%,transparent);color:var(--primary);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--primary) 10%,transparent)}
+      @media (min-width:1280px){.hkb-marketplace-filter-grid{grid-template-columns:repeat(6,minmax(0,1fr))!important}}
       [data-hub-tool-price-hidden="true"]{display:none!important}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgb(0 0 0 / .48);padding:16px;color:var(--foreground,#111827);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
       #${DIALOG_ID} .hkb-card{width:min(420px,100%);height:388px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
@@ -1347,7 +1981,7 @@
       #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
       #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 14%,transparent);padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s;touch-action:none;user-select:none}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:var(--border,#cbd5e1) transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:var(--border,#cbd5e1)}
-      #${DIALOG_ID} .hkb-channel-list-stage{position:relative;min-height:36px}#${DIALOG_ID} .hkb-channel-slot{position:absolute;left:0;right:0;transition:top .12s ease}#${DIALOG_ID} .hkb-channel-placeholder{position:absolute;left:0;right:0;border:1px dashed var(--primary,var(--foreground,#111827));border-radius:8px;background:color-mix(in oklab,var(--primary,var(--foreground,#111827)) 8%,transparent)}#${DIALOG_ID} .hkb-channel-row{height:36px;box-sizing:border-box;display:flex;align-items:center;gap:6px;padding:4px 6px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-row.is-dragging{border-color:var(--primary,var(--foreground,#111827));background:var(--card,#fff);box-shadow:0 8px 18px -14px rgb(15 23 42 / .65);pointer-events:none}#${DIALOG_ID} .hkb-channel-index{width:22px;flex-shrink:0;color:var(--muted-foreground,#64748b);font-size:12px;font-variant-numeric:tabular-nums;text-align:center}#${DIALOG_ID} .hkb-drag-handle{width:22px;height:26px;min-height:26px;border:0;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:grab;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;font:inherit;line-height:1;letter-spacing:1px}#${DIALOG_ID} .hkb-drag-handle:active{cursor:grabbing}#${DIALOG_ID} .hkb-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-channel-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}#${DIALOG_ID} .hkb-row-btn{width:26px;height:26px;min-height:26px;border-color:transparent}#${DIALOG_ID} .hkb-row-btn svg{width:14px;height:14px}#${DIALOG_ID} .hkb-remove{color:var(--muted-foreground,#6b7280)}#${DIALOG_ID} .hkb-remove:hover{color:var(--destructive,#dc2626)}
+      #${DIALOG_ID} .hkb-channel-list-stage{position:relative;min-height:36px}#${DIALOG_ID} .hkb-channel-slot{position:absolute;left:0;right:0;transition:top .12s ease}#${DIALOG_ID} .hkb-channel-placeholder{position:absolute;left:0;right:0;border:1px dashed var(--primary,var(--foreground,#111827));border-radius:8px;background:color-mix(in oklab,var(--primary,var(--foreground,#111827)) 8%,transparent)}#${DIALOG_ID} .hkb-channel-row{height:36px;box-sizing:border-box;display:flex;align-items:center;gap:6px;padding:4px 6px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--foreground,#111827);font-size:13px}#${DIALOG_ID} .hkb-channel-row:hover{background:var(--accent,#fff);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-channel-row.is-dragging{border-color:var(--primary,var(--foreground,#111827));background:var(--card,#fff);box-shadow:0 8px 18px -14px rgb(15 23 42 / .65);pointer-events:none}#${DIALOG_ID} .hkb-drag-handle{width:22px;height:26px;min-height:26px;border:0;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:grab;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;font:inherit;line-height:1;letter-spacing:1px}#${DIALOG_ID} .hkb-drag-handle:active{cursor:grabbing}#${DIALOG_ID} .hkb-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-channel-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}#${DIALOG_ID} .hkb-row-btn{width:26px;height:26px;min-height:26px;border-color:transparent}#${DIALOG_ID} .hkb-row-btn svg{width:14px;height:14px}#${DIALOG_ID} .hkb-remove{color:var(--muted-foreground,#6b7280)}#${DIALOG_ID} .hkb-remove:hover{color:var(--destructive,#dc2626)}
       #${DIALOG_ID} .hkb-empty{padding:14px 10px;color:var(--muted-foreground,#9ca3af);font-size:13px}
       #${DIALOG_ID} .hkb-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:0;padding-top:16px;border-top:1px solid var(--border,#f3f4f6)}
       #${DIALOG_ID} .hkb-edit-actions{border-top:none;padding-top:18px}
@@ -1406,10 +2040,6 @@
       return;
     }
     if (action === "edit-drag-channel") return;
-    if (action === "edit-move-channel") {
-      moveEditChannel(actionEl.dataset.channelId || "", actionEl.dataset.direction || "down");
-      return;
-    }
     if (!actionEl.closest?.('[data-role="key-picker"]')) closeKeyMenu();
     try {
       setBusy(true);
@@ -1452,7 +2082,7 @@
     if (document.getElementById(DIALOG_ID)) return;
     const dialog = document.createElement("div");
     dialog.id = DIALOG_ID; dialog.hidden = true;
-    dialog.innerHTML = `<div class="hkb-card" role="dialog" aria-modal="true">
+    dialog.innerHTML = `<div class="hkb-card" role="dialog" aria-modal="true" aria-label="API 密钥渠道管理">
       <div class="hkb-main" data-view-panel="main">
         <div class="hkb-switch" role="tablist" aria-label="密钥操作">
           <button type="button" role="tab" class="hkb-mode" data-action="set-key-mode" data-mode="update" aria-selected="true">绑定渠道</button>
@@ -1464,19 +2094,19 @@
             <div class="hkb-field"><span class="hkb-label">API Key</span><div class="hkb-select-row"><div class="hkb-key-picker" data-role="key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="key-menu" role="listbox" hidden></ul></div><button type="button" class="hkb-icon-btn" data-action="copy-key" title="复制密钥" aria-label="复制密钥"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button><button type="button" class="hkb-icon-btn" data-action="reload-keys" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M16 8h5V3"></path></svg></button><button type="button" class="hkb-icon-btn" data-action="open-edit" title="编辑绑定渠道" aria-label="编辑绑定渠道"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg></button></div></div>
           </div>
           <div data-key-panel="create" role="tabpanel" hidden>
-            <div class="hkb-field"><span class="hkb-label">Key 名称</span><input class="hkb-control" data-role="new-key-name" type="text" placeholder="输入 Key 名称"></div>
+            <div class="hkb-field"><label class="hkb-label" for="hkb-new-key-name">Key 名称</label><input id="hkb-new-key-name" name="hkb-new-key-name" class="hkb-control" data-role="new-key-name" type="text" placeholder="输入 Key 名称" autocomplete="off"></div>
           </div>
         </div>
-        <div class="hkb-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="append-bind" data-action-panel="update">追加绑定</button><button type="button" class="hkb-secondary" data-action="replace-bind" data-action-panel="update">替换绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button></div><div class="hkb-status" data-role="status"></div><div class="hkb-action-right"><button type="button" class="hkb-ghost" data-action="close">关闭</button></div></div>
+        <div class="hkb-actions"><div class="hkb-action-left"><button type="button" class="hkb-primary" data-action="append-bind" data-action-panel="update">追加绑定</button><button type="button" class="hkb-secondary" data-action="replace-bind" data-action-panel="update">替换绑定</button><button type="button" class="hkb-primary" data-action="create-bind" data-action-panel="create" hidden>新建并绑定</button><button type="button" class="hkb-secondary hkb-copy-new" data-action="copy-created-key" data-action-panel="create" data-role="copy-created-key" hidden>复制新密钥</button></div><div class="hkb-status" data-role="status" role="status" aria-live="polite"></div><div class="hkb-action-right"><button type="button" class="hkb-ghost" data-action="close">关闭</button></div></div>
       </div>
       <div class="hkb-main" data-view-panel="edit" hidden>
-        <div class="hkb-edit-title"><span>编辑绑定渠道</span></div>
+        <div class="hkb-edit-title"><button type="button" class="hkb-icon-btn hkb-back" data-action="close-edit" title="返回" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span>编辑绑定渠道</span></div>
         <div class="hkb-edit-body">
           <div class="hkb-edit-row"><span class="hkb-label">API Key</span><div class="hkb-key-picker" data-role="edit-key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="edit-key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="edit-key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="edit-key-menu" role="listbox" hidden></ul></div></div>
           <div class="hkb-edit-row"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="edit-channel-label"></div></div>
           <div class="hkb-edit-row hkb-edit-row-list"><span class="hkb-label">绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
         </div>
-        <div class="hkb-actions hkb-edit-actions"><div class="hkb-action-left"><button type="button" class="hkb-secondary" data-action="edit-add-current">添加</button></div><div class="hkb-status" data-role="edit-status"></div><div class="hkb-action-right"><button type="button" class="hkb-primary" data-action="save-edit">保存</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
+        <div class="hkb-actions hkb-edit-actions"><div class="hkb-action-left"><button type="button" class="hkb-secondary" data-action="edit-add-current">添加</button></div><div class="hkb-status" data-role="edit-status" role="status" aria-live="polite"></div><div class="hkb-action-right"><button type="button" class="hkb-primary" data-action="save-edit">保存</button><button type="button" class="hkb-ghost" data-action="close-edit">取消</button></div></div>
       </div>
     </div>`;
     dialog.addEventListener("click", (event) => {
@@ -1518,524 +2148,6 @@
     setStatus("");
   }
 
-  async function graphql(query, variables = {}, operationName = undefined) {
-    const headers = { "content-type": "application/json", "x-project-id": graphqlHeaders.projectID };
-    if (graphqlHeaders.authorization) headers.authorization = graphqlHeaders.authorization;
-    const response = await nativeFetch(new URL(GRAPHQL_PATH, location.origin), {
-      method: "POST",
-      credentials: "same-origin",
-      headers,
-      body: JSON.stringify({ query, variables, operationName }),
-    });
-    const payload = await response.json();
-    if (!response.ok || payload.errors?.length) throw new Error(payload.errors?.[0]?.message || `请求失败：${response.status}`);
-    return payload.data;
-  }
-
-  async function loadMissingChannelNames(channelIDs) {
-    const missingIDs = uniqueChannelIDs(channelIDs)
-      .filter((id) => !channelCache.has(String(id)))
-      .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
-    const results = await Promise.all(missingIDs.map((id) => loadChannelName(id).catch(() => null)));
-    return results.filter(Boolean).length;
-  }
-
-  async function loadChannelName(channelID) {
-    const numericID = extractNumericChannelID(channelID);
-    if (!numericID) return null;
-    if (channelCache.has(String(numericID))) return channelCache.get(String(numericID));
-    if (channelNameRequestCache.has(numericID)) return channelNameRequestCache.get(numericID);
-    const request = graphql(
-      queries.getChannelName,
-      { id: `gid://axonhub/Channel/${numericID}` },
-      "GetChannelName",
-    ).then((data) => {
-      const channel = data?.node;
-      if (channel?.id && channel?.name) {
-        rememberChannel(channel);
-        return channelCache.get(String(numericID)) || channel;
-      }
-      return null;
-    }).finally(() => {
-      channelNameRequestCache.delete(numericID);
-    });
-    channelNameRequestCache.set(numericID, request);
-    return request;
-  }
-
-  async function loadMe() {
-    if (meCache) return meCache;
-    const data = await graphql(queries.me, {}, "Me");
-    meCache = data.me;
-    return meCache;
-  }
-
-  async function loadKeys(force = false) {
-    if (keysCache.length && !force) {
-      renderKeyOptions();
-      return keysCache;
-    }
-    setStatus("正在加载 API Key");
-    const userID = (await loadMe())?.id;
-    if (!userID) throw new Error("未读取到当前用户 ID");
-    const keys = [];
-    let after = null;
-    do {
-      const data = await graphql(queries.getKeys, {
-        first: 100,
-        after,
-        where: { statusIn: ["enabled", "disabled"], userID, typeNotIn: ["noauth"] },
-        orderBy: { field: "CREATED_AT", direction: "DESC" },
-      }, "GetApiKeys");
-      const page = data.apiKeys;
-      keys.push(...(page?.edges || []).map((edge) => edge.node).filter(Boolean));
-      after = page?.pageInfo?.hasNextPage ? page.pageInfo.endCursor : null;
-    } while (after);
-    keysCache = keys;
-    renderKeyOptions();
-    setStatus(keys.length ? "" : "没有可用 API Key");
-    return keys;
-  }
-
-  async function createKey(name) {
-    const data = await graphql(queries.createKey, { input: { name, type: "user", projectID: graphqlHeaders.projectID } }, "CreateAPIKey");
-    return data.createAPIKey;
-  }
-
-  async function updateExistingKeyBinding(mode) {
-    const result = await bindChannelToKey(selectedKeyID, currentChannelID(), mode);
-    if (mode === "append" && result.alreadyBound) setStatus("当前渠道已在选中 Key 的绑定列表中");
-    else setStatus(mode === "replace" ? "已替换选中 Key 的渠道绑定" : "已追加当前渠道到选中 Key");
-  }
-
-  async function createKeyAndBind() {
-    const name = getValue("new-key-name").trim();
-    if (!name) throw new Error("请先填写新 Key 名称");
-    const key = await createKey(name);
-    await bindChannelToKey(key.id, currentChannelID(), "replace");
-    await loadKeys(true);
-    setCreatedKeyValue(apiKeyValue(key));
-    setStatus(`已新建并绑定：${key.name || name}`);
-  }
-
-  async function bindChannelToKey(keyID, channelID, mode = "replace") {
-    if (!keyID) throw new Error("请选择 API Key");
-    if (!channelID) throw new Error("请选择渠道");
-    setStatus("正在读取当前 Key 配置");
-    const data = await graphql(queries.getKey, { id: keyID }, "GetApiKey");
-    const numericChannelID = extractNumericChannelID(channelID);
-    if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
-    if (!numericChannelID) throw new Error(`渠道 ID 无效：${channelID}`);
-    setStatus("正在写入渠道绑定");
-    const input = buildProfilesInput(data.node.profiles, numericChannelID, mode);
-    await graphql(queries.updateProfiles, { id: keyID, input }, "UpdateAPIKeyProfiles");
-    return { alreadyBound: mode === "append" && getActiveProfile(data.node.profiles).channelIDs?.includes(numericChannelID) };
-  }
-
-  function buildProfilesInput(profilesPayload, channelID, mode = "replace") {
-    const targetIDs = mode === "append"
-      ? uniqueChannelIDs([...currentProfileChannelIDs(profilesPayload), channelID])
-      : [channelID];
-    return buildProfilesInputWithChannelIDs(profilesPayload, targetIDs);
-  }
-
-  function buildProfilesInputWithChannelIDs(profilesPayload, channelIDs) {
-    const activeProfile = profilesPayload.activeProfile || "default";
-    const profiles = Array.isArray(profilesPayload.profiles) && profilesPayload.profiles.length
-      ? profilesPayload.profiles.map((profile) => ({ ...profile }))
-      : [{ name: activeProfile }];
-    const target = profiles.find((profile) => profile.name === activeProfile) || profiles[0];
-    target.name = target.name || activeProfile;
-    target.channelIDs = uniqueChannelIDs(channelIDs);
-    target.channelTags = Array.isArray(target.channelTags) ? target.channelTags : [];
-    target.channelTagsMatchMode = target.channelTagsMatchMode || "any";
-    target.modelMappings = Array.isArray(target.modelMappings) ? target.modelMappings : [];
-    target.modelIDs = Array.isArray(target.modelIDs) ? target.modelIDs : [];
-    target.channelBindingMode = "manual";
-    target.dynamicChannelStrategy = null;
-    return { activeProfile, profiles };
-  }
-
-  function getActiveProfile(profilesPayload) {
-    const activeProfile = profilesPayload?.activeProfile || "default";
-    const profiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
-    return profiles.find((profile) => profile.name === activeProfile) || profiles[0] || {};
-  }
-
-  function currentProfileChannelIDs(profilesPayload) {
-    return uniqueChannelIDs(getActiveProfile(profilesPayload).channelIDs || []);
-  }
-
-  function uniqueChannelIDs(channelIDs) {
-    const ids = [];
-    const seen = new Set();
-    for (const id of channelIDs || []) {
-      const numericID = extractNumericChannelID(id);
-      if (!numericID || seen.has(numericID)) continue;
-      seen.add(numericID);
-      ids.push(numericID);
-    }
-    return ids;
-  }
-
-  function renderKeyOptions() {
-    if (!keysCache.some((key) => key.id === selectedKeyID)) selectedKeyID = keysCache[0]?.id || "";
-    document.querySelectorAll(`#${DIALOG_ID} [data-role="key-menu"], #${DIALOG_ID} [data-role="edit-key-menu"]`).forEach((menu) => {
-      menu.innerHTML = keysCache.length
-        ? keysCache.map((key) => `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}" role="option" aria-selected="${String(key.id === selectedKeyID)}"><span>${escapeHtml(keyLabel(key))}</span></button></li>`).join("")
-        : `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="" role="option" disabled>暂无 API Key</button></li>`;
-    });
-    syncKeyPicker();
-  }
-
-  function setCurrentChannel(channel, options = {}) {
-    const dialog = document.getElementById(DIALOG_ID);
-    if (!dialog) return;
-    dialog.dataset.channelId = channel.id || "";
-    dialog.dataset.channelName = channel.name || "";
-    const label = document.querySelector(`#${DIALOG_ID} [data-role="channel-label"]`);
-    if (label) label.textContent = channel.name || (options.allowEmpty ? "未指定" : "未读取到当前渠道");
-    setStatus(channel.id || options.allowEmpty ? "" : "未读取到渠道 ID，请刷新重试");
-  }
-
-  function currentChannelID() {
-    const channelID = document.getElementById(DIALOG_ID)?.dataset?.channelId || "";
-    if (!channelID) throw new Error("无当前渠道");
-    return channelID;
-  }
-
-  async function openEditPanel() {
-    if (!selectedKeyID) throw new Error("请先选择 API Key");
-    const dialog = document.getElementById(DIALOG_ID);
-    if (!dialog) return;
-    const channelID = dialog.dataset.channelId || "";
-    showEditPanel();
-    setEditDirty(false);
-    setEditStatus("加载中");
-    const channelLabelEl = dialog.querySelector("[data-role='edit-channel-label']");
-    if (channelLabelEl) channelLabelEl.textContent = channelID ? channelLabel(channelID) : "未指定";
-    syncKeyPicker();
-    const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
-    if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
-    editChannelIDs = currentProfileChannelIDs(data.node.profiles);
-    renderEditChannelList();
-    const loadToken = ++editLoadToken;
-    loadMissingChannelNames(editChannelIDs).then((loaded) => {
-      if (loaded && loadToken === editLoadToken && currentViewPanel() === "edit") renderEditChannelList();
-    }).catch(() => {});
-    setEditStatus("");
-  }
-
-  function showEditPanel() {
-    closeKeyMenu();
-    showViewPanel("edit");
-  }
-
-  function showMainPanel() {
-    editChannelIDs = [];
-    editLoadToken += 1;
-    setEditDirty(false);
-    showViewPanel("main");
-    setEditStatus("");
-  }
-
-  function showViewPanel(view) {
-    document.querySelectorAll(`#${DIALOG_ID} [data-view-panel]`).forEach((panel) => {
-      panel.hidden = panel.dataset.viewPanel !== view;
-    });
-  }
-
-  function currentViewPanel() {
-    return document.querySelector(`#${DIALOG_ID} [data-view-panel]:not([hidden])`)?.dataset?.viewPanel || "main";
-  }
-
-  function addCurrentChannelToEditList() {
-    const numericID = extractNumericChannelID(currentChannelID());
-    if (!numericID) throw new Error("无当前渠道");
-    if (editChannelIDs.includes(numericID)) {
-      setEditStatus("已存在");
-      return;
-    }
-    editChannelIDs = [...editChannelIDs, numericID];
-    renderEditChannelList();
-    setEditDirty(true);
-    setEditStatus("已添加");
-  }
-
-  function removeEditChannel(channelID) {
-    const numericID = extractNumericChannelID(channelID);
-    if (!numericID) {
-      setEditStatus("渠道 ID 无效");
-      return;
-    }
-    editChannelIDs = editChannelIDs.filter((id) => id !== numericID);
-    renderEditChannelList();
-    setEditDirty(true);
-    setEditStatus("已移除");
-  }
-
-  const EDIT_CHANNEL_ROW_STEP = 40;
-
-  function clampEditChannelIndex(index) {
-    return Math.max(0, Math.min(editChannelIDs.length - 1, index));
-  }
-
-  function moveChannelIDToIndex(channelIDs, channelID, targetIndex) {
-    const numericID = extractNumericChannelID(channelID);
-    const currentIndex = channelIDs.indexOf(numericID);
-    const nextIndex = Math.max(0, Math.min(channelIDs.length - 1, Number(targetIndex) || 0));
-    if (!numericID || currentIndex < 0 || currentIndex === nextIndex) return channelIDs;
-    const nextIDs = [...channelIDs];
-    const [item] = nextIDs.splice(currentIndex, 1);
-    nextIDs.splice(nextIndex, 0, item);
-    return nextIDs;
-  }
-
-  function moveEditChannel(channelID, direction) {
-    const numericID = extractNumericChannelID(channelID);
-    const currentIndex = editChannelIDs.indexOf(numericID);
-    const offset = direction === "up" ? -1 : 1;
-    const nextIndex = currentIndex + offset;
-    if (!numericID || currentIndex < 0 || nextIndex < 0 || nextIndex >= editChannelIDs.length) return;
-    editChannelIDs = moveChannelIDToIndex(editChannelIDs, numericID, nextIndex);
-    renderEditChannelList();
-    setEditDirty(true);
-    setEditStatus("已调整");
-  }
-
-  function handleEditChannelDragStart(event) {
-    const handle = event.target?.closest?.('[data-action="edit-drag-channel"]');
-    if (!handle) return;
-    const numericID = extractNumericChannelID(handle.dataset.channelId || "");
-    const currentIndex = editChannelIDs.indexOf(numericID);
-    const list = handle.closest?.('[data-role="edit-channel-list"]');
-    if (!numericID || currentIndex < 0 || !list) return;
-    const listRect = list.getBoundingClientRect();
-    const rowRect = handle.closest?.(".hkb-channel-row")?.getBoundingClientRect?.();
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget?.setPointerCapture?.(event.pointerId);
-    editDragState = {
-      channelID: numericID,
-      pointerID: event.pointerId,
-      pointerY: event.clientY,
-      listTop: listRect.top,
-      scrollTop: list.scrollTop || 0,
-      grabOffsetY: event.clientY - (rowRect?.top || (listRect.top + currentIndex * EDIT_CHANNEL_ROW_STEP)),
-      targetIndex: currentIndex,
-    };
-    renderEditChannelList();
-    setEditStatus("");
-  }
-
-  function handleEditChannelDragMove(event) {
-    if (!editDragState || editDragState.pointerID !== event.pointerId) return;
-    const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
-    if (!list || !editChannelIDs.length) return;
-    const listRect = list.getBoundingClientRect();
-    const edge = 34;
-    if (event.clientY - listRect.top < edge) list.scrollTop = Math.max(0, (list.scrollTop || 0) - 4.3);
-    else if (listRect.bottom - event.clientY < edge) list.scrollTop = Math.min(list.scrollHeight - list.clientHeight, (list.scrollTop || 0) + 4.3);
-    const scrollTop = list.scrollTop || 0;
-    const contentY = event.clientY - listRect.top + scrollTop;
-    editDragState = {
-      ...editDragState,
-      pointerY: event.clientY,
-      listTop: listRect.top,
-      scrollTop,
-      targetIndex: clampEditChannelIndex(Math.floor(contentY / EDIT_CHANNEL_ROW_STEP)),
-    };
-    event.preventDefault();
-    renderEditChannelList();
-  }
-
-  function handleEditChannelDragEnd(event) {
-    if (!editDragState || editDragState.pointerID !== event.pointerId) return;
-    const nextIDs = moveChannelIDToIndex(editChannelIDs, editDragState.channelID, editDragState.targetIndex);
-    const changed = nextIDs !== editChannelIDs;
-    editChannelIDs = nextIDs;
-    editDragState = null;
-    event.currentTarget?.releasePointerCapture?.(event.pointerId);
-    renderEditChannelList();
-    if (changed) setEditDirty(true);
-    setEditStatus(changed ? "已调整" : "");
-  }
-
-  function cancelEditChannelDrag(event) {
-    if (!editDragState || (event?.pointerId != null && editDragState.pointerID !== event.pointerId)) return;
-    editDragState = null;
-    renderEditChannelList();
-    setEditStatus("");
-  }
-
-  async function saveEditBindings() {
-    if (!selectedKeyID) throw new Error("请先选择 API Key");
-    setEditStatus("保存中");
-    const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
-    if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
-    const input = buildProfilesInputWithChannelIDs(data.node.profiles, editChannelIDs);
-    await graphql(queries.updateProfiles, { id: selectedKeyID, input }, "UpdateAPIKeyProfiles");
-    setEditDirty(false);
-    setEditStatus("已保存");
-  }
-
-  function renderEditChannelList() {
-    const list = document.querySelector(`#${DIALOG_ID} [data-role="edit-channel-list"]`);
-    if (!list) return;
-    if (!editChannelIDs.length) {
-      editDragState = null;
-      list.innerHTML = `<div class="hkb-empty">暂无绑定渠道</div>`;
-      return;
-    }
-    list.innerHTML = renderEditChannelStage();
-  }
-
-  function renderEditChannelStage() {
-    const dragIndex = editDragState ? editChannelIDs.indexOf(editDragState.channelID) : -1;
-    const dragChannelID = dragIndex >= 0 ? editDragState.channelID : null;
-    const targetIndex = dragChannelID ? clampEditChannelIndex(editDragState.targetIndex) : -1;
-    const visibleIDs = dragChannelID ? editChannelIDs.filter((id) => id !== dragChannelID) : editChannelIDs;
-    const slots = visibleIDs.map((id, visibleIndex) => {
-      const displayIndex = dragChannelID && visibleIndex >= targetIndex ? visibleIndex + 1 : visibleIndex;
-      return `<div class="hkb-channel-slot" style="top:${displayIndex * EDIT_CHANNEL_ROW_STEP}px">${renderEditChannelRow(id, displayIndex)}</div>`;
-    }).join("");
-    const placeholder = dragChannelID
-      ? `<div class="hkb-channel-placeholder" style="top:${targetIndex * EDIT_CHANNEL_ROW_STEP}px;height:36px"></div>`
-      : "";
-    const dragTop = dragChannelID
-      ? Math.max(0, Math.min((editChannelIDs.length - 1) * EDIT_CHANNEL_ROW_STEP, editDragState.pointerY - editDragState.listTop + editDragState.scrollTop - editDragState.grabOffsetY))
-      : 0;
-    const dragging = dragChannelID
-      ? `<div class="hkb-channel-slot" style="top:${dragTop}px;z-index:2;transition:none">${renderEditChannelRow(dragChannelID, targetIndex, { dragging: true })}</div>`
-      : "";
-    return `<div class="hkb-channel-list-stage" style="height:${editChannelIDs.length * EDIT_CHANNEL_ROW_STEP}px">${slots}${placeholder}${dragging}</div>`;
-  }
-
-  function renderEditChannelRow(channelID, index, options = {}) {
-    const safeID = escapeHtml(channelID);
-    const rowClass = options.dragging ? "hkb-channel-row is-dragging" : "hkb-channel-row";
-    return `<div class="${rowClass}" data-channel-id="${safeID}">
-      <button type="button" class="hkb-drag-handle" data-action="edit-drag-channel" data-channel-id="${safeID}" title="拖动排序" aria-label="拖动排序">::</button>
-      <span class="hkb-channel-name">${escapeHtml(channelLabel(channelID))}</span>
-      <span class="hkb-channel-actions">
-        <button type="button" class="hkb-icon-btn hkb-row-btn hkb-remove" data-action="edit-remove-channel" data-channel-id="${safeID}" title="移除" aria-label="移除"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg></button>
-      </span>
-    </div>`;
-  }
-
-  function channelLabel(channelID) {
-    const id = String(channelID || "");
-    const channel = channelCache.get(id) || channelCache.get(String(extractNumericChannelID(id) || ""));
-    return channel?.name || (id ? `Channel #${extractNumericChannelID(id) || id}` : "未读取到当前渠道");
-  }
-
-  function apiKeyValue(key) { return String(key?.key || ""); }
-
-  function setCreatedKeyValue(value) {
-    createdKeyValueCache = String(value || "");
-    syncActionButtons();
-  }
-
-  async function copyCreatedKey() {
-    const value = createdKeyValue();
-    if (!value) throw new Error("没有可复制的 API Key");
-    await navigator.clipboard.writeText(value);
-    setStatus("已复制新 API Key");
-  }
-
-  function createdKeyValue() { return createdKeyValueCache; }
-
-  function syncActionButtons() {
-    const dialog = document.getElementById(DIALOG_ID);
-    const selectedMode = dialog?.dataset?.keyMode || "update";
-    const actions = dialog?.querySelector(".hkb-actions");
-    if (!actions) return;
-    actions.querySelectorAll("[data-action-panel]").forEach((el) => {
-      const isCopyCreated = el.dataset.role === "copy-created-key";
-      const hasCreatedKey = Boolean(createdKeyValue());
-      const isCreateBind = el.dataset.action === "create-bind";
-      el.hidden = el.dataset.actionPanel !== selectedMode || (isCopyCreated && !hasCreatedKey) || (isCreateBind && hasCreatedKey);
-    });
-  }
-
-  async function copySelectedKey() {
-    const keyID = selectedKeyID;
-    if (!keyID) throw new Error("请先选择 API Key");
-    const data = await graphql(queries.getKeyValue, { id: keyID }, "GetApiKeyValue");
-    const value = data?.node?.key;
-    if (!value) throw new Error("该 Key 无可复制的密钥值");
-    await navigator.clipboard.writeText(value);
-    setStatus("已复制密钥");
-  }
-
-  function keyLabel(key) { return String(key?.name || key?.id || "未命名 API Key"); }
-
-  function selectKey(keyID) {
-    if (!keyID || !keysCache.some((key) => key.id === keyID)) return;
-    selectedKeyID = keyID;
-    syncKeyPicker();
-  }
-
-  function syncKeyPicker() {
-    const current = keysCache.find((key) => key.id === selectedKeyID);
-    document.querySelectorAll(`#${DIALOG_ID} [data-role="key-label"], #${DIALOG_ID} [data-role="edit-key-label"]`).forEach((label) => {
-      label.textContent = current ? keyLabel(current) : "暂无 API Key";
-    });
-    document.querySelectorAll(`#${DIALOG_ID} [data-role="key-trigger"], #${DIALOG_ID} [data-role="edit-key-trigger"]`).forEach((trigger) => {
-      trigger.disabled = !keysCache.length;
-    });
-    document.querySelectorAll(`#${DIALOG_ID} [data-action="select-key"]`).forEach((option) => {
-      option.setAttribute("aria-selected", String(option.dataset.keyId === selectedKeyID));
-    });
-  }
-
-  function toggleKeyMenu() {
-    const scope = currentViewPanel() === "edit" ? "edit-" : "";
-    const trigger = document.querySelector(`#${DIALOG_ID} [data-role="${scope}key-trigger"]`);
-    const menu = document.querySelector(`#${DIALOG_ID} [data-role="${scope}key-menu"]`);
-    if (!trigger || !menu || !keysCache.length) return;
-    const open = menu.hidden;
-    closeKeyMenu();
-    menu.hidden = !open;
-    trigger.setAttribute("aria-expanded", String(open));
-  }
-
-  function closeKeyMenu() {
-    document.querySelectorAll(`#${DIALOG_ID} [data-role="key-menu"], #${DIALOG_ID} [data-role="edit-key-menu"]`).forEach((menu) => {
-      menu.hidden = true;
-    });
-    document.querySelectorAll(`#${DIALOG_ID} [data-role="key-trigger"], #${DIALOG_ID} [data-role="edit-key-trigger"]`).forEach((trigger) => {
-      trigger.setAttribute("aria-expanded", "false");
-    });
-  }
-
-  function getValue(role) { return document.querySelector(`#${DIALOG_ID} [data-role="${role}"]`)?.value || ""; }
-  function setStatus(message) {
-    const status = document.querySelector(`#${DIALOG_ID} [data-role="status"]`); if (status) status.textContent = message;
-  }
-  function setEditStatus(message) {
-    const status = document.querySelector(`#${DIALOG_ID} [data-role="edit-status"]`); if (status) status.textContent = message;
-  }
-  function setEditDirty(isDirty) {
-    editDirty = Boolean(isDirty);
-    const saveButton = document.querySelector(`#${DIALOG_ID} [data-action="save-edit"]`);
-    if (saveButton) saveButton.dataset.dirty = String(editDirty);
-  }
-  function setBusy(isBusy) {
-    document.querySelectorAll(`#${DIALOG_ID} button`).forEach((button) => { button.disabled = isBusy; });
-    if (!isBusy) syncKeyPicker();
-  }
-
-  function markScrolling(node) {
-    node.classList.add("is-scrolling");
-    clearTimeout(node.__hkbScrollTimer);
-    node.__hkbScrollTimer = setTimeout(() => node.classList.remove("is-scrolling"), 700);
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "").replace(HTML_ESCAPE_RE, (char) => HTML_ESCAPE_MAP[char]);
-  }
-
   function startMountWatcher() {
     patchHistoryRouting();
     cleanupLegacyPriceParam();
@@ -2054,7 +2166,7 @@
     if (!location.pathname.startsWith("/marketplace")) return;
     if (event.type === "keydown" && !["Enter", " ", "Spacebar"].includes(event.key)) return;
     const tab = event.target?.closest?.("[role='tab'], [data-slot='tabs-trigger']");
-    if (!tab || !/渠道广场|channel/i.test(String(tab.textContent || ""))) return;
+    if (!tab || !MARKETPLACE_CHANNEL_TAB_RE.test(String(tab.textContent || ""))) return;
     setTimeout(schedulePanel, 0);
     setTimeout(schedulePanel, 120);
   }
@@ -2090,37 +2202,16 @@
   else startMountWatcher();
 
   if (window.__hubKeyBinderEnableTest) {
-    let graphqlRunner = null;
-    const testGraphql = (query, variables = {}, operationName = undefined) =>
-      (graphqlRunner ? graphqlRunner(query, variables, operationName) : graphql(query, variables, operationName));
-    const testLoadChannelName = async (channelID) => {
-      const numericID = extractNumericChannelID(channelID);
-      if (!numericID) return null;
-      if (channelCache.has(String(numericID))) return channelCache.get(String(numericID));
-      const data = await testGraphql(
-        queries.getChannelName,
-        { id: `gid://axonhub/Channel/${numericID}` },
-        "GetChannelName",
-      );
-      const channel = data?.node;
-      if (!channel?.id || !channel?.name) return null;
-      rememberChannel(channel);
-      return channelCache.get(String(numericID)) || channel;
-    };
-    const testLoadMissingChannelNames = async (channelIDs) => {
-      const missingIDs = uniqueChannelIDs(channelIDs)
-        .filter((id) => !channelCache.has(String(id)))
-        .slice(0, CHANNEL_NAME_LOOKUP_LIMIT);
-      const results = await Promise.all(missingIDs.map((id) => testLoadChannelName(id).catch(() => null)));
-      return results.filter(Boolean).length;
-    };
     window.__hubKeyBinderTest = {
-      extractNumericChannelID,
       findChannelFromButton,
       isApiKeyActionButton,
-      isCreateApiButtonText,
+      isApiKeyActionButtonText,
+      isExistingApiKeyActionButtonText,
+      isMarketplaceVerificationButtonText,
+      selectPreferredApiKeyActionButton,
+      moveChannelTriggerToActionEnd,
+      movePriceFilterToEndOfGrid,
       rememberChannelsFromPayload,
-      apiKeyValue,
       buildProfilesInput,
       buildProfilesInputWithChannelIDs,
       moveChannelIDToIndex,
@@ -2128,26 +2219,20 @@
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
       augmentChannelModelPricesPayload,
-      channelFreeStateForModelDetail,
-      implicitFreePriceRowsForCurrentModelPage,
       ensurePricingFields,
       marketplaceChannelsScanUrl,
       sanitizeMarketplaceChannelsRequest,
-      cleanMarketplaceSearch,
       normalizePriceFilter,
       requestUrl,
       requestBodyText,
       readRequestBodyText,
       withMarketplaceModelPricingFields,
-      rememberModelProviderPricesFromPayload,
       isTargetRoute,
       isRequestsConsumerRoute,
-      findRequestsApiKeyFilterButton,
-      insertRequestTriggers,
       channelLabel,
-      loadMissingChannelNames: testLoadMissingChannelNames,
+      loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
-      __setGraphqlForTest: (runner) => { graphqlRunner = runner; },
+      __setGraphqlForTest: setGraphqlRunnerForTest,
     };
   }
 })();

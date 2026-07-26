@@ -13,37 +13,6 @@
     else delete trigger.dataset.channelId;
   }
 
-  function findDirectReactChannel(node) {
-    for (const key of Object.keys(node || {})) {
-      if (key.startsWith("__reactProps$")) {
-        const channel = pickReactChannel(node[key]);
-        if (channel) return channel;
-      } else if (key.startsWith("__reactFiber$")) {
-        const channel = findChannelInFiber(node[key]);
-        if (channel) return channel;
-      }
-    }
-    return null;
-  }
-
-  function findChannelInFiber(fiber) {
-    let current = fiber;
-    for (let depth = 0; current && depth < REACT_FIBER_CHANNEL_LOOKUP_LIMIT; depth += 1, current = current.return) {
-      const channel = pickReactChannel(current.memoizedProps) || pickReactChannel(current.pendingProps);
-      if (channel) return channel;
-    }
-    return null;
-  }
-
-  function pickReactChannel(props) {
-    if (!props || typeof props !== "object" || Array.isArray(props)) return null;
-    if (isChannelObject(props)) return props;
-    for (const key of ["channel", "node", "data", "item", "row"]) {
-      if (isChannelObject(props[key])) return props[key];
-    }
-    return null;
-  }
-
   function isChannelObject(value) {
     if (!value?.id || !value?.name) return false;
     if (value.__typename === "Channel") return true;
@@ -70,19 +39,6 @@
     return changed;
   }
 
-  function knownPayloadChannels(payload) {
-    const channels = [];
-    if (Array.isArray(payload?.items)) channels.push(...payload.items);
-    if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
-      channels.push(...payload.data.marketplaceModel.providers.map((provider) => provider?.channel).filter(Boolean));
-    }
-    if (Array.isArray(payload?.data?.channels?.edges)) {
-      channels.push(...payload.data.channels.edges.map((edge) => edge?.node).filter(Boolean));
-    }
-    if (payload?.data?.node) channels.push(payload.data.node);
-    return channels.filter(isChannelObject);
-  }
-
   function rememberChannelList(channels) {
     let changed = false;
     for (const channel of channels || []) {
@@ -101,8 +57,8 @@
       const providerModelID = provider?.modelID || modelID;
       const detail = channelFreeStateForModelDetail(channel, providerModelID);
       rememberImplicitFreeModelPageContext(channel, providerModelID, detail);
-      const state = detail.free;
-      for (const key of modelProviderCacheKeys(channel.id, modelID)) modelProviderPriceCache.set(key, state);
+      const cacheKey = modelProviderCacheKey(channel.id, modelID);
+      modelProviderPriceCache.set(cacheKey, detail.free);
     }
   }
 
@@ -115,16 +71,6 @@
   function modelProviderCacheKey(channelID, modelID) {
     const numericID = extractNumericChannelID(channelID);
     return `${numericID || String(channelID || "")}:${normalizeModelID(modelID)}`;
-  }
-
-  function modelProviderCacheKeys(channelID, modelID) {
-    const keys = new Set([modelProviderCacheKey(channelID, modelID)]);
-    const numericID = extractNumericChannelID(channelID);
-    if (numericID) {
-      keys.add(`${numericID}:${normalizeModelID(modelID)}`);
-      keys.add(`gid://axonhub/channel/${numericID}:${normalizeModelID(modelID)}`);
-    }
-    return Array.from(keys);
   }
 
   function rememberChannel(channel) {
@@ -143,8 +89,8 @@
       item.priceSummary ??= existing.priceSummary;
       if (existing.name === item.name
         && existing.type === item.type
-        && existing.supportedModels === item.supportedModels
-        && existing.priceSummary === item.priceSummary) return false;
+        && sameStringArray(existing.supportedModels, item.supportedModels)
+        && sameJsonValue(existing.priceSummary, item.priceSummary)) return false;
     }
     channelCache.set(item.id, item);
     const numericID = extractNumericChannelID(item.id);
@@ -154,5 +100,22 @@
   }
 
   function normalizeChannelName(name) {
-    return String(name || "").replace(/\s+/g, " ").trim();
+    return cleanText(name);
+  }
+
+  function sameStringArray(left, right) {
+    if (left === right) return true;
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((value, index) => value === right[index]);
+  }
+
+  function sameJsonValue(left, right) {
+    if (left === right) return true;
+    if (left == null || right == null) return left == null && right == null;
+    try {
+      return JSON.stringify(left) === JSON.stringify(right);
+    } catch {
+      return false;
+    }
   }

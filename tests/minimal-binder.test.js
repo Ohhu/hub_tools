@@ -1,157 +1,23 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const vm = require("node:vm");
+const { loadHelpers: loadUserscriptHelpers } = require("./helpers/load-userscript");
+const { FakeElement } = require("./helpers/fake-dom");
 
-class FakeClassList {
-  constructor(value = "") {
-    this.values = new Set(String(value).split(/\s+/).filter(Boolean));
-  }
-
-  add(...names) {
-    names.forEach((name) => this.values.add(name));
-  }
-
-  contains(name) {
-    return this.values.has(name);
-  }
-
-  toString() {
-    return Array.from(this.values).join(" ");
-  }
-}
-
-class FakeElement {
-  constructor({ text = "", attrs = {}, className = "", parent = null, props = {} } = {}) {
-    this.textContent = text;
-    this.attributes = { ...attrs };
-    this.className = className;
-    this.classList = new FakeClassList(className);
-    this.parentElement = parent;
-    this.children = [];
-    this.dataset = {};
-    this.listeners = {};
-    Object.assign(this, props);
-    if (parent) parent.children.push(this);
-  }
-
-  getAttribute(name) {
-    return this.attributes[name] ?? null;
-  }
-
-  setAttribute(name, value) {
-    this.attributes[name] = String(value);
-  }
-
-  addEventListener(type, listener) {
-    this.listeners[type] = listener;
-  }
-
-  closest(selector) {
-    let current = this;
-    while (current) {
-      if (selector === "[data-slot=\"card\"]" && current.attributes["data-slot"] === "card") return current;
-      if (selector === "[data-slot=\"card\"], tr, [role=\"row\"]") {
-        if (current.attributes["data-slot"] === "card" || current.tagName === "TR" || current.attributes.role === "row") return current;
-      }
-      current = current.parentElement;
-    }
-    return null;
-  }
-
-  querySelector(selector) {
-    return this.querySelectorAll(selector)[0] || null;
-  }
-
-  querySelectorAll(selector) {
-    const results = [];
-    const visit = (node) => {
-      for (const child of node.children) {
-        if (matchesFakeSelector(child, selector)) {
-          results.push(child);
-        }
-        visit(child);
-      }
-    };
-    visit(this);
-    return results;
-  }
-
-  replaceWith(node) {
-    const index = this.parentElement.children.indexOf(this);
-    this.parentElement.children[index] = node;
-    node.parentElement = this.parentElement;
-  }
-}
-
-function matchesFakeSelector(node, selector) {
-  return String(selector).split(",").some((part) => {
-    const value = part.trim();
-    if (value === "[data-slot=\"card-title\"]") return node.attributes["data-slot"] === "card-title";
-    if (value === "[role=\"combobox\"]") return node.attributes.role === "combobox";
-    if (value === "[role=\"tab\"][aria-selected=\"true\"]") return node.attributes.role === "tab" && node.attributes["aria-selected"] === "true";
-    if (value === "[role=\"tab\"][data-state=\"active\"]") return node.attributes.role === "tab" && node.attributes["data-state"] === "active";
-    return value === "*" || value === "button";
-  });
-}
-
-function loadHelpers() {
-  const source = fs.readFileSync("LinuxDo Hub Tool.user.js", "utf8");
-  const documentElement = new FakeElement();
-  const documentState = { main: null, selectedTab: null };
-  const context = {
-    Headers,
-    Request,
-    MutationObserver: class { observe() {} },
-    ReadableStream,
-    URL,
-    URLSearchParams,
-    document: {
-      readyState: "loading",
-      documentElement,
-      addEventListener() {},
-      createElement: () => new FakeElement(),
-      getElementById: () => null,
-      querySelector: (selector) => {
-        if (selector === "main") return documentState.main;
-        if (selector === '[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]') return documentState.selectedTab;
-        return null;
-      },
-      querySelectorAll: () => [],
-    },
-    location: { pathname: "/marketplace", origin: "https://hub.linux.do" },
-    navigator: { clipboard: { writeText() {} } },
-    setTimeout,
-    window: {
-      __hubKeyBinderEnableTest: true,
-      addEventListener() {},
-      fetch() {},
-    },
-  };
-  context.window.window = context.window;
-  context.window.document = context.document;
-  context.window.location = context.location;
-  context.window.navigator = context.navigator;
-  context.window.setTimeout = setTimeout;
-  context.window.MutationObserver = context.MutationObserver;
-  context.window.Headers = Headers;
-  context.window.Request = Request;
-  context.window.ReadableStream = ReadableStream;
-  context.window.URL = URL;
-  context.window.URLSearchParams = URLSearchParams;
-  vm.runInNewContext(source, context.window);
-  context.window.__hubKeyBinderTest.__documentState = documentState;
-  context.window.__hubKeyBinderTest.__location = context.location;
-  return context.window.__hubKeyBinderTest;
-}
-
-const helpers = loadHelpers();
+const helpers = loadUserscriptHelpers();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const source = fs.readFileSync("LinuxDo Hub Tool.user.js", "utf8");
 
 async function main() {
-assert.equal(helpers.isCreateApiButtonText("创建 API 密钥"), true);
-assert.equal(helpers.isCreateApiButtonText("Create API Key"), true);
-assert.equal(helpers.isCreateApiButtonText("更新 API 密钥"), false);
+assert.equal(helpers.isApiKeyActionButtonText("创建 API 密钥"), true);
+assert.equal(helpers.isApiKeyActionButtonText("添加到已有密钥"), true);
+assert.equal(helpers.isApiKeyActionButtonText("Create API Key"), true);
+assert.equal(helpers.isApiKeyActionButtonText("Add to Existing API Key"), true);
+assert.equal(helpers.isApiKeyActionButtonText("更新 API 密钥"), false);
+assert.equal(helpers.isExistingApiKeyActionButtonText("添加到已有密钥"), true);
+assert.equal(helpers.isExistingApiKeyActionButtonText("创建 API 密钥"), false);
+assert.equal(helpers.isMarketplaceVerificationButtonText("真伪核验"), true);
+assert.equal(helpers.isMarketplaceVerificationButtonText("Verify Authenticity"), true);
+assert.equal(helpers.isMarketplaceVerificationButtonText("提交举报"), false);
 assert.equal(source.includes('data-role="created-key-wrap"'), false);
 assert.equal(source.includes('data-role="created-key"'), false);
 assert.equal(source.includes("dataset.createdKeyValue"), false);
@@ -175,6 +41,9 @@ assert.equal(source.includes("new MutationObserver((mutations) =>"), true);
 assert.equal(source.includes('hkb-icon-btn svg'), true);
 assert.equal(source.includes('aria-label="复制密钥"'), true);
 assert.equal(source.includes('aria-label="编辑绑定渠道"'), true);
+assert.equal(source.includes('role="dialog" aria-modal="true" aria-label="API 密钥渠道管理"'), true);
+assert.equal(source.includes('id="hkb-new-key-name" name="hkb-new-key-name"'), true);
+assert.equal(source.includes('data-role="status" role="status" aria-live="polite"'), true);
 assert.equal(source.includes('data-action="append-bind"'), true);
 assert.equal(source.includes('data-action="replace-bind"'), true);
 assert.equal(source.includes(">替换绑定</button>"), true);
@@ -205,7 +74,13 @@ assert.equal(source.includes("hkb-price-label"), false);
 assert.equal(source.includes('data-price="all"'), false);
 assert.equal(source.includes('data-price="paid"'), false);
 assert.equal(source.includes('data-price="free"'), true);
-assert.equal(source.includes("hkb-price-button border-input"), true);
+assert.equal(source.includes("hkb-price-button inline-flex"), true);
+assert.equal(source.includes("width:fit-content"), true);
+assert.equal(source.includes("border-radius:999px"), true);
+assert.equal(source.includes(">价格</p>"), true);
+assert.equal(source.includes("hkb-marketplace-filter-grid"), true);
+assert.equal(source.includes("grid-template-columns:repeat(6,minmax(0,1fr))"), true);
+assert.equal(source.includes("order:2147483647"), true);
 assert.equal(source.includes('searchParams.set("price"'), false);
 assert.equal(source.includes('searchParams.get("price"'), false);
 assert.equal(source.includes("let searchNudgeCounter = 0"), false);
@@ -222,9 +97,14 @@ assert.equal(source.includes("倍率从低到高"), true);
 assert.equal(source.includes("综合推荐"), true);
 assert.equal(source.includes("function resetPriceFilterState"), true);
 assert.equal(source.includes("height:36px"), true);
-assert.equal(source.includes("--hkb-price-left"), true);
-assert.equal(source.includes("--hkb-price-top"), true);
-assert.equal(source.includes("anchorRect.right - parentRect.left"), true);
+assert.equal(source.includes("--hkb-price-left"), false);
+assert.equal(source.includes("--hkb-price-top"), false);
+assert.equal(source.includes("anchorRect.right - parentRect.left"), false);
+assert.equal(source.includes("cloneNode?.(true)"), false);
+assert.equal(source.includes("CHANNEL_TRIGGER_CLASS"), true);
+assert.equal(source.includes('aria-hidden="true"><circle cx="7.5"'), true);
+assert.equal(source.includes("function removeMarketplaceVerificationButtons"), true);
+assert.equal(source.includes("MARKETPLACE_VERIFICATION_ACTION_RE"), true);
 assert.equal(source.includes("html.dark #${PRICE_FIELD_ID}"), true);
 assert.equal(source.includes("background:var(--card,#fff)"), true);
 assert.equal(source.includes("border:1px solid var(--border"), true);
@@ -287,8 +167,29 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
 }
 
 {
+  const actionContainer = new FakeElement();
+  const pricingButton = new FakeElement({ text: "查看定价", parent: actionContainer });
+  const trigger = new FakeElement({ text: "更新 API 密钥", parent: actionContainer });
+  const reportButton = new FakeElement({ text: "提交举报", parent: actionContainer });
+  helpers.moveChannelTriggerToActionEnd(trigger);
+  assert.deepEqual(actionContainer.children, [pricingButton, reportButton, trigger]);
+  helpers.moveChannelTriggerToActionEnd(trigger);
+  assert.deepEqual(actionContainer.children, [pricingButton, reportButton, trigger]);
+}
+
+{
+  const nativeActionButton = new FakeElement({ text: "添加到已有密钥" });
+  assert.equal(helpers.isApiKeyActionButton(nativeActionButton), true);
+}
+
+{
   const createButton = new FakeElement({ text: "创建 API 密钥" });
-  assert.equal(helpers.isApiKeyActionButton(createButton), true);
+  const existingButton = new FakeElement({ text: "添加到已有密钥" });
+  assert.strictEqual(helpers.selectPreferredApiKeyActionButton([createButton, existingButton]), existingButton);
+  assert.strictEqual(helpers.selectPreferredApiKeyActionButton([createButton]), createButton);
+  assert.strictEqual(helpers.selectPreferredApiKeyActionButton([]), null);
+  assert.equal(source.includes("function replaceApiKeyActionButtons"), true);
+  assert.equal(source.includes("buttons.forEach((button) => button.remove?.())"), true);
 }
 
 {
@@ -298,7 +199,7 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
     parent: main,
   });
   new FakeElement({ text: "列表渠道", parent: tableRow });
-  const button = new FakeElement({ text: "创建 API 密钥", parent: tableRow });
+  const button = new FakeElement({ text: "添加到已有密钥", parent: tableRow });
   helpers.rememberChannelsFromPayload({ id: "gid://axonhub/Channel/5638", name: "列表渠道", supportedModels: [] });
   assert.deepEqual(plain(helpers.findChannelFromButton(button)), {
     id: "gid://axonhub/Channel/5638",
@@ -672,10 +573,27 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
   const sortField = new FakeElement();
   const sortLabel = new FakeElement({ text: "排序", parent: sortField });
   new FakeElement({ text: "综合推荐", attrs: { role: "combobox" }, parent: sortField });
-  fields.push(tagsLabel, sortLabel);
+  const healthField = new FakeElement();
+  const healthLabel = new FakeElement({ text: "健康序列", parent: healthField });
+  new FakeElement({ text: "近 1 小时", attrs: { role: "combobox" }, parent: healthField });
+  fields.push(tagsLabel, sortLabel, healthLabel);
   const anchors = helpers.findMarketplaceFilterFields(fields);
   assert.strictEqual(anchors.tags, tagsField);
   assert.strictEqual(anchors.sort, sortField);
+  assert.strictEqual(anchors.health, healthField);
+}
+
+{
+  const filterGrid = new FakeElement();
+  const healthField = new FakeElement({ text: "健康序列", parent: filterGrid });
+  const priceField = new FakeElement({ text: "价格", parent: filterGrid });
+  const sortField = new FakeElement({ text: "排序", parent: filterGrid });
+  assert.strictEqual(filterGrid.lastElementChild, sortField);
+  assert.strictEqual(helpers.movePriceFilterToEndOfGrid(healthField, priceField), filterGrid);
+  assert.strictEqual(filterGrid.lastElementChild, priceField);
+  assert.deepEqual(filterGrid.children, [healthField, sortField, priceField]);
+  helpers.movePriceFilterToEndOfGrid(healthField, priceField);
+  assert.deepEqual(filterGrid.children, [healthField, sortField, priceField]);
 }
 
 {

@@ -27,9 +27,7 @@
   }
 
   function rememberRequestHeaders(input, init) {
-    const url = requestUrl(input);
-    const path = String(url || "").replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    if (!path.startsWith("/admin/")) return;
+    if (!requestPath(input).startsWith("/admin/")) return;
     rememberGraphqlHeaders(input, init);
   }
 
@@ -41,8 +39,7 @@
   }
 
   function rememberResponseChannels(response) {
-    const type = response?.headers?.get?.("content-type") || "";
-    if (!type.includes("application/json")) return;
+    if (!isJsonResponse(response)) return;
     response.clone().json().then((payload) => {
       const changed = rememberChannelsFromPayload(payload);
       rememberModelProviderPricesFromPayload(payload);
@@ -87,143 +84,23 @@
   }
 
   function isMarketplaceChannelsUrl(url) {
-    const value = String(url || "");
-    const path = value.replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    return path === "/admin/marketplace/channels";
+    return requestPath(url) === "/admin/marketplace/channels";
   }
 
   function isGraphqlMarketplaceModelRequest(input, init, response) {
-    const path = requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    if (path !== GRAPHQL_PATH) return false;
+    if (requestPath(input) !== GRAPHQL_PATH) return false;
     if (!location.pathname.startsWith("/marketplace/models/")) return false;
-    if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
+    if (response?.headers?.get?.("content-type") && !isJsonResponse(response)) return false;
     const body = requestBodyText(input, init);
     return body.includes("MarketplaceModel") || body.includes("marketplaceModel");
   }
 
   function isGraphqlChannelModelPricesRequest(input, init, response) {
-    const path = requestUrl(input).replace(/^https?:\/\/[^/]+/i, "").split(/[?#]/)[0];
-    if (path !== GRAPHQL_PATH) return false;
+    if (requestPath(input) !== GRAPHQL_PATH) return false;
     if (!location.pathname.startsWith("/marketplace")) return false;
-    if (response?.headers?.get?.("content-type") && !response.headers.get("content-type").includes("application/json")) return false;
+    if (response?.headers?.get?.("content-type") && !isJsonResponse(response)) return false;
     const body = requestBodyText(input, init);
     const operationName = graphqlOperationName(body);
     return operationName === "ChannelModelPrices"
       || /query\s+ChannelModelPrices\b/.test(body);
-  }
-
-  function graphqlOperationName(bodyText) {
-    try {
-      return JSON.parse(String(bodyText || "")).operationName || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function requestUrl(input) {
-    if (input instanceof URL) return input.toString();
-    return String(typeof input === "string" ? input : input?.url || "");
-  }
-
-  async function rememberRequestBodyText(input, init) {
-    await readRequestBodyText(input, init);
-  }
-
-  async function readRequestBodyText(input, init) {
-    if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
-    if (typeof Request !== "undefined" && input instanceof Request) {
-      if (requestBodyTextCache.has(input)) return requestBodyTextCache.get(input);
-      try {
-        const text = await input.clone().text();
-        requestBodyTextCache.set(input, text);
-        return text;
-      } catch {
-        requestBodyTextCache.set(input, "");
-        return "";
-      }
-    }
-    return requestBodyText(input, init);
-  }
-
-  function requestBodyText(input, init) {
-    if (init && Object.prototype.hasOwnProperty.call(init, "body")) return bodyValueText(init.body);
-    if (typeof Request !== "undefined" && input instanceof Request) return requestBodyTextCache.get(input) || "";
-    return bodyValueText(input?.body ?? "");
-  }
-
-  function bodyValueText(value) {
-    if (typeof value === "string") return value;
-    if (value == null) return "";
-    if (typeof URLSearchParams !== "undefined" && value instanceof URLSearchParams) return value.toString();
-    if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return "";
-    return String(value);
-  }
-
-  async function withMarketplaceModelPricingFields(input, init) {
-    const bodyText = await readRequestBodyText(input, init);
-    if (!isMarketplaceModelRequestBody(bodyText)) return { input, init };
-    let body;
-    try {
-      body = JSON.parse(bodyText);
-    } catch {
-      return { input, init };
-    }
-    const query = ensurePricingFields(body.query);
-    if (query === body.query) return { input, init };
-    const nextInit = {
-      ...init,
-      body: JSON.stringify({ ...body, query }),
-    };
-    return { input, init: nextInit };
-  }
-
-  function isMarketplaceModelRequestBody(bodyText) {
-    const text = String(bodyText || "");
-    return text.includes("MarketplaceModel") || text.includes("marketplaceModel");
-  }
-
-  function ensurePricingFields(query) {
-    if (!query) return query;
-    const text = String(query);
-    let output = "", cursor = 0, changed = false;
-    const pricingStartRe = /pricing\s*\{/g;
-    for (let match; (match = pricingStartRe.exec(text));) {
-      const openIndex = text.indexOf("{", match.index);
-      const closeIndex = findMatchingBrace(text, openIndex);
-      if (openIndex < 0 || closeIndex < 0) break;
-      const block = text.slice(match.index, closeIndex + 1);
-      const inner = text.slice(openIndex + 1, closeIndex);
-      output += text.slice(cursor, match.index);
-      if (!/\busagePerUnit\b/.test(inner)) {
-        output += block;
-      } else {
-        const additions = [
-          HAS_MODE_RE.test(inner) ? "" : "\n          mode",
-          HAS_FLAT_FEE_RE.test(inner) ? "" : "\n          flatFee",
-        ].join("");
-        output += `${text.slice(match.index, openIndex + 1)}${additions}${inner}}`;
-        changed = changed || Boolean(additions);
-      }
-      cursor = closeIndex + 1;
-      pricingStartRe.lastIndex = closeIndex + 1;
-    }
-    output += text.slice(cursor);
-    return changed ? output : query;
-  }
-
-  function findMatchingBrace(text, openIndex) {
-    if (openIndex < 0 || text[openIndex] !== "{") return -1;
-    let depth = 0;
-    for (let index = openIndex; index < text.length; index += 1) {
-      if (text[index] === "{") depth += 1;
-      else if (text[index] === "}") {
-        depth -= 1;
-        if (depth === 0) return index;
-      }
-    }
-    return -1;
-  }
-
-  function normalizePriceFilter(value) {
-    return value === "free" || value === "paid" ? value : "all";
   }
