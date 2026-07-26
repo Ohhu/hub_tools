@@ -1,2 +1,24 @@
 test/
 .DS_Store
+.cursor/
+
+# Local AI/Trellis workflow infrastructure
+AGENTS.md
+.trellis/.gitignore
+.trellis/.template-hashes.json
+.trellis/.version
+.trellis/agents/
+.trellis/config.yaml
+.trellis/scripts/
+.trellis/workflow.md
+.trellis/workspace/
+
+# Unused Trellis bootstrap templates and task
+.trellis/spec/backend/
+.trellis/spec/guides/
+.trellis/spec/frontend/component-guidelines.md
+.trellis/spec/frontend/directory-structure.md
+.trellis/spec/frontend/hook-guidelines.md
+.trellis/spec/frontend/state-management.md
+.trellis/spec/frontend/type-safety.md
+.trellis/tasks/00-bootstrap-guidelines/
