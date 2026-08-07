@@ -21,4 +21,6 @@ AGENTS.md
 .trellis/spec/frontend/hook-guidelines.md
 .trellis/spec/frontend/state-management.md
 .trellis/spec/frontend/type-safety.md
-.trellis/tasks/00-bootstrap-guidelines/
+
+# Local Trellis task docs (PRD/design/implement) are tracked per-developer
+.trellis/tasks/

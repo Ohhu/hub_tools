@@ -34,6 +34,34 @@ function priceMatchesProviderForModel(provider, mode) {
   return mode === "free" ? detail.free === true : detail.free === false;
 }
 
+function filterMarketplacePayloadByOfficial(payload, onlyOfficial) {
+  if (!onlyOfficial) return payload;
+  if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
+    const providers = payload.data.marketplaceModel.providers.filter((provider) =>
+      channelIsOfficial(provider?.channel),
+    );
+    return {
+      ...payload,
+      data: {
+        ...payload.data,
+        marketplaceModel: {
+          ...payload.data.marketplaceModel,
+          providers,
+        },
+      },
+    };
+  }
+  if (!Array.isArray(payload?.items)) return payload;
+  const items = payload.items.filter((item) => channelIsOfficial(item));
+  return {
+    ...payload,
+    items,
+    totalCount: items.length,
+    totalPages: 1,
+    page: 1,
+  };
+}
+
 async function filterMarketplaceChannelItems(items, mode, search, input, init) {
   const checks = await Promise.all((items || []).map(async (item) =>
     priceMatchesMarketplaceChannel(item, mode, search, input, init).catch(() => {

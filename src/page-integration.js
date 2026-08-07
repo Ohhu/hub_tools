@@ -302,13 +302,20 @@ function hasFilterControl(field) {
   return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
 }
 
+function currentOfficialFilter() {
+  return selectedOfficialFilter;
+}
+
 function createPriceFilterField() {
   const field = document.createElement("div");
   field.id = PRICE_FIELD_ID;
   field.className = "space-y-1";
   field.dataset.hubToolPriceFilter = "true";
-  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">价格</p>
-    <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
+  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">渠道筛选</p>
+    <div class="hkb-filter-buttons" role="group" aria-label="渠道筛选">
+      <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>
+      <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="official-filter" aria-label="只看官方渠道">官方</button>
+    </div>`;
   field.addEventListener("click", handlePriceFilterClick);
   return field;
 }
@@ -320,12 +327,36 @@ function syncPriceFilterField(field) {
     const selected = button.dataset.price === price;
     button.setAttribute("aria-pressed", String(selected));
   });
+  const official = currentOfficialFilter();
+  field.querySelectorAll('[data-role="official-filter"]').forEach((button) => {
+    button.setAttribute("aria-pressed", String(official));
+  });
 }
 
 function handlePriceFilterClick(event) {
+  const officialButton = event.target?.closest?.('[data-role="official-filter"]');
+  if (officialButton) {
+    setOfficialFilter(!selectedOfficialFilter);
+    return;
+  }
   const button = event.target?.closest?.("[data-price]");
   if (!button) return;
   setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
+}
+
+function setOfficialFilter(value) {
+  const official = Boolean(value);
+  if (official === selectedOfficialFilter) return;
+  selectedOfficialFilter = official;
+  syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
+  applyVisiblePriceFilter();
+  triggerMarketplaceRefresh();
+}
+
+function resetOfficialFilterState() {
+  if (!selectedOfficialFilter) return;
+  selectedOfficialFilter = false;
+  applyVisiblePriceFilter();
 }
 
 function setPriceFilter(value) {
@@ -370,12 +401,13 @@ function triggerMarketplaceSortRefresh(targetText) {
 }
 
 function resetPriceFilterState() {
-  if (selectedPriceFilter === "all") return;
-  selectedPriceFilter = "all";
+  const priceChanged = selectedPriceFilter !== "all";
+  const officialChanged = selectedOfficialFilter;
+  if (priceChanged) selectedPriceFilter = "all";
+  if (officialChanged) selectedOfficialFilter = false;
+  if (!priceChanged && !officialChanged) return;
   applyVisiblePriceFilter();
-}
-
-function findMarketplaceSortTrigger() {
+}function findMarketplaceSortTrigger() {
   const anchors = findMarketplaceFilterFields();
   return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
 }
@@ -411,11 +443,15 @@ function findMarketplaceSearchInput() {
 function applyVisiblePriceFilter() {
   if (!location.pathname.startsWith("/marketplace/models/")) return;
   const mode = currentPriceFilter();
+  const official = currentOfficialFilter();
   for (const button of findChannelActionButtons()) {
     const context = findChannelContext(button);
     const channel = findActionButtonChannel(button);
     const state = modelProviderFreeState(channel);
-    const hidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+    const officialState = modelProviderOfficialState(channel);
+    const priceHidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+    const officialHidden = official && officialState === false;
+    const hidden = priceHidden || officialHidden;
     if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
   }
 }
@@ -436,6 +472,95 @@ function insertRequestTriggers() {
   const host = apiKeyButton?.parentElement;
   if (!apiKeyButton || !host || host.querySelector?.(`.${REQUEST_TRIGGER_CLASS}`)) return;
   apiKeyButton.insertAdjacentElement("afterend", createRequestEditTrigger(apiKeyButton));
+}
+
+function injectRequestLogMultiplierColumn() {
+  if (!isRequestsConsumerRoute()) return;
+  const table = document.querySelector("main table");
+  if (!table) return;
+  const channelColumnIndex = requestLogChannelColumnIndex(table);
+  if (channelColumnIndex < 0) return;
+  ensureRequestLogMultiplierHeader(table, channelColumnIndex);
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+  for (const row of rows) {
+    const cells = row.children;
+    if (!cells.length) continue;
+    const channelCell = cells[channelColumnIndex];
+    if (!channelCell) continue;
+    const targetIndex = channelColumnIndex + 1;
+    const existingCell = targetIndex < cells.length ? cells[targetIndex] : null;
+    if (existingCell?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) continue;
+    const requestID = requestLogIDFromRow(row);
+    const multiplier = requestID == null ? null : requestLogMultiplierCache.get(requestID);
+    const formattedMultiplier = multiplier == null ? "" : formatMultiplier(multiplier);
+    const cell = document.createElement("td");
+    cell.className = `${channelCell.className || "p-2 align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS}`;
+    if (multiplier == null) {
+      cell.textContent = "-";
+      cell.setAttribute("aria-label", "渠道倍率未知");
+    } else {
+      cell.textContent = `×${formattedMultiplier}`;
+      cell.title = `渠道倍率：${formattedMultiplier}`;
+      cell.setAttribute("aria-label", `渠道倍率 ${formattedMultiplier}`);
+      if (multiplierTone(formattedMultiplier) === "low") cell.classList.add(MULTIPLIER_LOW_TONE_CLASS);
+      if (multiplierTone(formattedMultiplier) === "high") cell.classList.add(MULTIPLIER_HIGH_TONE_CLASS);
+    }
+    if (existingCell) {
+      row.insertBefore(cell, existingCell);
+    } else {
+      row.appendChild(cell);
+    }
+  }
+}
+
+function ensureRequestLogMultiplierHeader(table, channelColumnIndex) {
+  const headers = Array.from(table.querySelectorAll("thead th"));
+  const channelHeader = headers[channelColumnIndex];
+  if (!channelHeader) return;
+  const targetIndex = channelColumnIndex + 1;
+  const existingHeader = targetIndex < headers.length ? headers[targetIndex] : null;
+  if (existingHeader?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) {
+    existingHeader.classList.add(MULTIPLIER_COLUMN_HEADER_CLASS);
+    return;
+  }
+  const header = document.createElement("th");
+  header.className = `${channelHeader.className || "h-10 px-2 text-left align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS} ${MULTIPLIER_COLUMN_HEADER_CLASS}`;
+  header.textContent = "倍率";
+  header.setAttribute("aria-label", "倍率");
+  if (existingHeader) {
+    channelHeader.parentElement.insertBefore(header, existingHeader);
+  } else {
+    channelHeader.parentElement.appendChild(header);
+  }
+}
+
+function multiplierTone(multiplier) {
+  if (multiplier == null || multiplier === "") return "mid";
+  const value = Number(multiplier);
+  if (!Number.isFinite(value)) return "mid";
+  if (value < 1) return "low";
+  if (value > 2) return "high";
+  return "mid";
+}
+
+function requestLogChannelColumnIndex(table) {
+  const headers = Array.from(table.querySelectorAll("thead th"));
+  const index = headers.findIndex((th) => cleanText(th.textContent) === "渠道");
+  return index < 0 ? -1 : index;
+}
+
+function requestLogIDFromRow(row) {
+  const idCell = row.children[0];
+  const text = cleanText(idCell?.textContent || "");
+  const match = text.match(/#(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function formatMultiplier(multiplier) {
+  const value = Number(multiplier);
+  if (!Number.isFinite(value)) return String(multiplier ?? "");
+  const normalizedValue = Number(value.toFixed(4));
+  return Number.isInteger(normalizedValue) ? normalizedValue.toFixed(1) : String(normalizedValue);
 }
 
 function isRequestsConsumerRoute() {
@@ -465,6 +590,7 @@ function ensurePanel() {
   replaceApiKeyActionButtons();
   removeMarketplaceVerificationButtons();
   insertRequestTriggers();
+  injectRequestLogMultiplierColumn();
   insertPriceFilter();
   applyVisiblePriceFilter();
 }

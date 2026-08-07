@@ -68,6 +68,8 @@
       findMarketplaceFilterFields,
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
+      filterMarketplacePayloadByOfficial,
+      channelIsOfficial,
       augmentChannelModelPricesPayload,
       ensurePricingFields,
       marketplaceChannelsScanUrl,
@@ -79,9 +81,12 @@
       withMarketplaceModelPricingFields,
       isTargetRoute,
       isRequestsConsumerRoute,
+      formatMultiplier,
+      multiplierTone,
       channelLabel,
       loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
+      __setOfficialFilterForTest: (value) => { selectedOfficialFilter = Boolean(value); },
       __setGraphqlForTest: setGraphqlRunnerForTest,
     };
   }

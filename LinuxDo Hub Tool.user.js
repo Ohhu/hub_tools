@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.3.5
+// @version      0.4
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -22,6 +22,11 @@ const CHANNEL_TRIGGER_CLASS = `${PANEL_ID}-channel-trigger`;
 const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
 const DIALOG_ID = `${PANEL_ID}-dialog`;
 const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
+const MULTIPLIER_TAG_CLASS = `${PANEL_ID}-multiplier-tag`;
+const MULTIPLIER_COLUMN_CLASS = `${PANEL_ID}-multiplier-column`;
+const MULTIPLIER_COLUMN_HEADER_CLASS = `${MULTIPLIER_COLUMN_CLASS}-header`;
+const MULTIPLIER_LOW_TONE_CLASS = `${MULTIPLIER_COLUMN_CLASS}-low`;
+const MULTIPLIER_HIGH_TONE_CLASS = `${MULTIPLIER_COLUMN_CLASS}-high`;
 const CHANNEL_NAME_LOOKUP_LIMIT = 20;
 const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
 const IMPLICIT_FREE_PRICE_LIMIT = 50;
@@ -41,14 +46,17 @@ const channelCache = new Map();
 const channelNameCache = new Map();
 const channelNameRequestCache = new Map();
 const modelProviderPriceCache = new Map();
+const modelProviderOfficialCache = new Map();
 const channelModelPricesCache = new Map();
 const modelPageImplicitFreeCache = new Map();
+const requestLogMultiplierCache = new Map();
 const requestBodyTextCache = new WeakMap();
 let meCache = null;
 let keysCache = [];
 let selectedKeyID = "";
 let mountTimer = 0;
 let selectedPriceFilter = "all";
+let selectedOfficialFilter = false;
 let createdKeyValueCache = "";
 let lastMarketplaceChannelsFetchAt = 0;
 let editChannelIDs = [];
@@ -296,6 +304,16 @@ function priceStateMatches(freeState, mode) {
   return mode === "free" ? freeState === true : freeState === false;
 }
 
+function channelIsOfficial(channel) {
+  if (typeof channel?.usesOfficialBaseURL === "boolean") return channel.usesOfficialBaseURL;
+  if (Array.isArray(channel?.tags)) {
+    if (channel.tags.some((tag) => tag === "official" || tag === "official:true")) return true;
+    if (channel.tags.includes("official:false")) return false;
+  }
+  if (typeof channel?.official === "boolean") return channel.official;
+  return false;
+}
+
 function marketplaceChannelFreeState(channel) {
   if (typeof channel?.priceSummary?.allFree === "boolean") return channel.priceSummary.allFree;
   return null;
@@ -462,6 +480,34 @@ function priceMatchesProviderForModel(provider, mode) {
   const detail = channelFreeStateForModelDetail(provider?.channel, modelID);
   if (mode === "free") rememberImplicitFreeModelPageContext(provider?.channel, modelID, detail);
   return mode === "free" ? detail.free === true : detail.free === false;
+}
+
+function filterMarketplacePayloadByOfficial(payload, onlyOfficial) {
+  if (!onlyOfficial) return payload;
+  if (Array.isArray(payload?.data?.marketplaceModel?.providers)) {
+    const providers = payload.data.marketplaceModel.providers.filter((provider) =>
+      channelIsOfficial(provider?.channel),
+    );
+    return {
+      ...payload,
+      data: {
+        ...payload.data,
+        marketplaceModel: {
+          ...payload.data.marketplaceModel,
+          providers,
+        },
+      },
+    };
+  }
+  if (!Array.isArray(payload?.items)) return payload;
+  const items = payload.items.filter((item) => channelIsOfficial(item));
+  return {
+    ...payload,
+    items,
+    totalCount: items.length,
+    totalPages: 1,
+    page: 1,
+  };
 }
 
 async function filterMarketplaceChannelItems(items, mode, search, input, init) {
@@ -677,8 +723,29 @@ function createZeroPriceItem(itemCode) {
     response.clone().json().then((payload) => {
       const changed = rememberChannelsFromPayload(payload);
       rememberModelProviderPricesFromPayload(payload);
+      rememberRequestLogMultipliers(payload);
       if (changed) schedulePanel();
     }).catch(() => {});
+  }
+
+  function rememberRequestLogMultipliers(payload) {
+    const edges = payload?.data?.requests?.edges;
+    if (!Array.isArray(edges)) return;
+    for (const edge of edges) {
+      const node = edge?.node;
+      if (!node?.id) continue;
+      const usageLog = node?.usageLogs?.edges?.[0]?.node;
+      const lines = usageLog?.costExplanation?.lines;
+      if (!Array.isArray(lines)) continue;
+      const multiplier = lines.find((line) => line?.multiplier != null)?.multiplier;
+      if (multiplier == null) continue;
+      requestLogMultiplierCache.set(requestLogNumericID(node.id), multiplier);
+    }
+  }
+
+  function requestLogNumericID(requestID) {
+    const match = String(requestID || "").match(/gid:\/\/axonhub\/Request\/(\d+)$/);
+    return match ? Number(match[1]) : null;
   }
 
   function wrapMarketplaceChannelsResponse(input, init, response) {
@@ -700,13 +767,15 @@ function createZeroPriceItem(itemCode) {
       return augmentChannelModelPricesPayload(input, init, payload);
     }
     const mode = normalizePriceFilter(price);
-    if (mode === "all") return payload;
-    if (isMarketplaceChannelsUrl(requestUrl(input))) {
-      const filteredPayload = await loadFilteredMarketplaceChannelsPayload(input, init, payload, mode);
-      rememberChannelsFromPayload(filteredPayload);
-      return filteredPayload;
+    let filteredPayload = payload;
+    if (mode !== "all") {
+      if (isMarketplaceChannelsUrl(requestUrl(input))) {
+        filteredPayload = await loadFilteredMarketplaceChannelsPayload(input, init, filteredPayload, mode);
+      } else {
+        filteredPayload = await filterMarketplacePayloadByPrice(filteredPayload, mode);
+      }
     }
-    const filteredPayload = await filterMarketplacePayloadByPrice(payload, mode);
+    filteredPayload = filterMarketplacePayloadByOfficial(filteredPayload, selectedOfficialFilter);
     rememberChannelsFromPayload(filteredPayload);
     return filteredPayload;
   }
@@ -844,6 +913,7 @@ function knownPayloadChannels(payload) {
       rememberImplicitFreeModelPageContext(channel, providerModelID, detail);
       const cacheKey = modelProviderCacheKey(channel.id, modelID);
       modelProviderPriceCache.set(cacheKey, detail.free);
+      modelProviderOfficialCache.set(cacheKey, channelIsOfficial(channel));
     }
   }
 
@@ -851,6 +921,12 @@ function knownPayloadChannels(payload) {
     if (!channel?.id) return null;
     const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
     return modelProviderPriceCache.has(key) ? modelProviderPriceCache.get(key) : null;
+  }
+
+  function modelProviderOfficialState(channel) {
+    if (!channel?.id) return null;
+    const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
+    return modelProviderOfficialCache.has(key) ? modelProviderOfficialCache.get(key) : null;
   }
 
   function modelProviderCacheKey(channelID, modelID) {
@@ -863,16 +939,19 @@ function knownPayloadChannels(payload) {
       id: String(channel.id),
       name: String(channel.name),
       type: channel.type,
+      usesOfficialBaseURL: channel.usesOfficialBaseURL,
       supportedModels: Array.isArray(channel.supportedModels) ? channel.supportedModels.slice() : undefined,
       priceSummary: channel.priceSummary,
     };
     const existing = channelCache.get(item.id);
     if (existing) {
       item.type ??= existing.type;
+      item.usesOfficialBaseURL ??= existing.usesOfficialBaseURL;
       item.supportedModels ??= existing.supportedModels;
       item.priceSummary ??= existing.priceSummary;
       if (existing.name === item.name
         && existing.type === item.type
+        && existing.usesOfficialBaseURL === item.usesOfficialBaseURL
         && sameStringArray(existing.supportedModels, item.supportedModels)
         && sameJsonValue(existing.priceSummary, item.priceSummary)) return false;
     }
@@ -1204,13 +1283,20 @@ function hasFilterControl(field) {
   return Boolean(field?.querySelector?.("select") || field?.querySelector?.('[role="combobox"]'));
 }
 
+function currentOfficialFilter() {
+  return selectedOfficialFilter;
+}
+
 function createPriceFilterField() {
   const field = document.createElement("div");
   field.id = PRICE_FIELD_ID;
   field.className = "space-y-1";
   field.dataset.hubToolPriceFilter = "true";
-  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">价格</p>
-    <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>`;
+  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">渠道筛选</p>
+    <div class="hkb-filter-buttons" role="group" aria-label="渠道筛选">
+      <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="price-filter" data-price="free" aria-label="只看免费渠道">免费</button>
+      <button type="button" class="hkb-price-button inline-flex items-center justify-center whitespace-nowrap outline-none" data-role="official-filter" aria-label="只看官方渠道">官方</button>
+    </div>`;
   field.addEventListener("click", handlePriceFilterClick);
   return field;
 }
@@ -1222,12 +1308,36 @@ function syncPriceFilterField(field) {
     const selected = button.dataset.price === price;
     button.setAttribute("aria-pressed", String(selected));
   });
+  const official = currentOfficialFilter();
+  field.querySelectorAll('[data-role="official-filter"]').forEach((button) => {
+    button.setAttribute("aria-pressed", String(official));
+  });
 }
 
 function handlePriceFilterClick(event) {
+  const officialButton = event.target?.closest?.('[data-role="official-filter"]');
+  if (officialButton) {
+    setOfficialFilter(!selectedOfficialFilter);
+    return;
+  }
   const button = event.target?.closest?.("[data-price]");
   if (!button) return;
   setPriceFilter(currentPriceFilter() === button.dataset.price ? "all" : button.dataset.price);
+}
+
+function setOfficialFilter(value) {
+  const official = Boolean(value);
+  if (official === selectedOfficialFilter) return;
+  selectedOfficialFilter = official;
+  syncPriceFilterField(document.getElementById(PRICE_FIELD_ID));
+  applyVisiblePriceFilter();
+  triggerMarketplaceRefresh();
+}
+
+function resetOfficialFilterState() {
+  if (!selectedOfficialFilter) return;
+  selectedOfficialFilter = false;
+  applyVisiblePriceFilter();
 }
 
 function setPriceFilter(value) {
@@ -1272,12 +1382,13 @@ function triggerMarketplaceSortRefresh(targetText) {
 }
 
 function resetPriceFilterState() {
-  if (selectedPriceFilter === "all") return;
-  selectedPriceFilter = "all";
+  const priceChanged = selectedPriceFilter !== "all";
+  const officialChanged = selectedOfficialFilter;
+  if (priceChanged) selectedPriceFilter = "all";
+  if (officialChanged) selectedOfficialFilter = false;
+  if (!priceChanged && !officialChanged) return;
   applyVisiblePriceFilter();
-}
-
-function findMarketplaceSortTrigger() {
+}function findMarketplaceSortTrigger() {
   const anchors = findMarketplaceFilterFields();
   return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
 }
@@ -1313,11 +1424,15 @@ function findMarketplaceSearchInput() {
 function applyVisiblePriceFilter() {
   if (!location.pathname.startsWith("/marketplace/models/")) return;
   const mode = currentPriceFilter();
+  const official = currentOfficialFilter();
   for (const button of findChannelActionButtons()) {
     const context = findChannelContext(button);
     const channel = findActionButtonChannel(button);
     const state = modelProviderFreeState(channel);
-    const hidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+    const officialState = modelProviderOfficialState(channel);
+    const priceHidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
+    const officialHidden = official && officialState === false;
+    const hidden = priceHidden || officialHidden;
     if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
   }
 }
@@ -1338,6 +1453,95 @@ function insertRequestTriggers() {
   const host = apiKeyButton?.parentElement;
   if (!apiKeyButton || !host || host.querySelector?.(`.${REQUEST_TRIGGER_CLASS}`)) return;
   apiKeyButton.insertAdjacentElement("afterend", createRequestEditTrigger(apiKeyButton));
+}
+
+function injectRequestLogMultiplierColumn() {
+  if (!isRequestsConsumerRoute()) return;
+  const table = document.querySelector("main table");
+  if (!table) return;
+  const channelColumnIndex = requestLogChannelColumnIndex(table);
+  if (channelColumnIndex < 0) return;
+  ensureRequestLogMultiplierHeader(table, channelColumnIndex);
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+  for (const row of rows) {
+    const cells = row.children;
+    if (!cells.length) continue;
+    const channelCell = cells[channelColumnIndex];
+    if (!channelCell) continue;
+    const targetIndex = channelColumnIndex + 1;
+    const existingCell = targetIndex < cells.length ? cells[targetIndex] : null;
+    if (existingCell?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) continue;
+    const requestID = requestLogIDFromRow(row);
+    const multiplier = requestID == null ? null : requestLogMultiplierCache.get(requestID);
+    const formattedMultiplier = multiplier == null ? "" : formatMultiplier(multiplier);
+    const cell = document.createElement("td");
+    cell.className = `${channelCell.className || "p-2 align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS}`;
+    if (multiplier == null) {
+      cell.textContent = "-";
+      cell.setAttribute("aria-label", "渠道倍率未知");
+    } else {
+      cell.textContent = `×${formattedMultiplier}`;
+      cell.title = `渠道倍率：${formattedMultiplier}`;
+      cell.setAttribute("aria-label", `渠道倍率 ${formattedMultiplier}`);
+      if (multiplierTone(formattedMultiplier) === "low") cell.classList.add(MULTIPLIER_LOW_TONE_CLASS);
+      if (multiplierTone(formattedMultiplier) === "high") cell.classList.add(MULTIPLIER_HIGH_TONE_CLASS);
+    }
+    if (existingCell) {
+      row.insertBefore(cell, existingCell);
+    } else {
+      row.appendChild(cell);
+    }
+  }
+}
+
+function ensureRequestLogMultiplierHeader(table, channelColumnIndex) {
+  const headers = Array.from(table.querySelectorAll("thead th"));
+  const channelHeader = headers[channelColumnIndex];
+  if (!channelHeader) return;
+  const targetIndex = channelColumnIndex + 1;
+  const existingHeader = targetIndex < headers.length ? headers[targetIndex] : null;
+  if (existingHeader?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) {
+    existingHeader.classList.add(MULTIPLIER_COLUMN_HEADER_CLASS);
+    return;
+  }
+  const header = document.createElement("th");
+  header.className = `${channelHeader.className || "h-10 px-2 text-left align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS} ${MULTIPLIER_COLUMN_HEADER_CLASS}`;
+  header.textContent = "倍率";
+  header.setAttribute("aria-label", "倍率");
+  if (existingHeader) {
+    channelHeader.parentElement.insertBefore(header, existingHeader);
+  } else {
+    channelHeader.parentElement.appendChild(header);
+  }
+}
+
+function multiplierTone(multiplier) {
+  if (multiplier == null || multiplier === "") return "mid";
+  const value = Number(multiplier);
+  if (!Number.isFinite(value)) return "mid";
+  if (value < 1) return "low";
+  if (value > 2) return "high";
+  return "mid";
+}
+
+function requestLogChannelColumnIndex(table) {
+  const headers = Array.from(table.querySelectorAll("thead th"));
+  const index = headers.findIndex((th) => cleanText(th.textContent) === "渠道");
+  return index < 0 ? -1 : index;
+}
+
+function requestLogIDFromRow(row) {
+  const idCell = row.children[0];
+  const text = cleanText(idCell?.textContent || "");
+  const match = text.match(/#(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function formatMultiplier(multiplier) {
+  const value = Number(multiplier);
+  if (!Number.isFinite(value)) return String(multiplier ?? "");
+  const normalizedValue = Number(value.toFixed(4));
+  return Number.isInteger(normalizedValue) ? normalizedValue.toFixed(1) : String(normalizedValue);
 }
 
 function isRequestsConsumerRoute() {
@@ -1367,6 +1571,7 @@ function ensurePanel() {
   replaceApiKeyActionButtons();
   removeMarketplaceVerificationButtons();
   insertRequestTriggers();
+  injectRequestLogMultiplierColumn();
   insertPriceFilter();
   applyVisiblePriceFilter();
 }
@@ -1931,17 +2136,29 @@ function escapeHtml(value) {
       html.dark .${CHANNEL_TRIGGER_CLASS}{border-color:color-mix(in oklab,var(--primary) 34%,var(--border));background:color-mix(in oklab,var(--primary) 12%,transparent);color:color-mix(in oklab,var(--primary) 82%,white)}
       html.dark .${CHANNEL_TRIGGER_CLASS}:hover{border-color:color-mix(in oklab,var(--primary) 52%,var(--border));background:color-mix(in oklab,var(--primary) 20%,transparent)}
       #${PRICE_FIELD_ID}{box-sizing:border-box;min-width:0;order:2147483647}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:fit-content;max-width:100%;height:32px;min-height:32px;border:1px solid var(--border,hsl(20 5.9% 90%));border-radius:999px;background:transparent;color:var(--muted-foreground,hsl(25 5.3% 44.7%));padding:5px 12px;font:inherit;font-size:13px;font-weight:500;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:none;transition:color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]{pointer-events:auto}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{border-color:color-mix(in oklab,var(--foreground,hsl(20 14.3% 4.1%)) 28%,var(--border,hsl(20 5.9% 90%)));background:var(--accent,hsl(60 4.8% 95.9%));color:var(--accent-foreground,var(--foreground,hsl(20 14.3% 4.1%)))}
-      #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{outline:none;border-color:var(--ring,var(--foreground,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--foreground,hsl(20 14.3% 4.1%))) 24%,transparent)}
-      #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 32%,transparent);background:color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 10%,transparent);color:var(--primary,hsl(20 14.3% 4.1%));box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--primary,hsl(20 14.3% 4.1%)) 8%,transparent)}
-      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]{background:transparent;box-shadow:none}
-      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]:hover{background:color-mix(in oklab,var(--accent) 70%,transparent)}
-      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"]:focus-visible{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklab,var(--ring) 35%,transparent)}
-      html.dark #${PRICE_FIELD_ID} [data-role="price-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--primary) 48%,transparent);background:color-mix(in oklab,var(--primary) 16%,transparent);color:var(--primary);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--primary) 10%,transparent)}
+      #${PRICE_FIELD_ID} .hkb-filter-buttons{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-height:32px}
+      #${PRICE_FIELD_ID} [data-role$="-filter"]{--hkb-filter-accent:var(--primary,hsl(20 14.3% 4.1%));box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:7px;width:fit-content;max-width:100%;height:32px;min-height:32px;border:1px solid var(--border,hsl(20 5.9% 90%));border-radius:999px;background:color-mix(in oklab,var(--background,#fff) 92%,transparent);color:var(--muted-foreground,hsl(25 5.3% 44.7%));padding:5px 12px;font:inherit;font-size:13px;font-weight:550;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 1px rgb(0 0 0 / .025);pointer-events:auto;transition:transform .15s ease,color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
+      #${PRICE_FIELD_ID} [data-role$="-filter"]::before{content:"";width:6px;height:6px;border-radius:999px;background:currentColor;opacity:.35;box-shadow:0 0 0 2px color-mix(in oklab,currentColor 10%,transparent);transition:opacity .15s ease,box-shadow .15s ease}
+      #${PRICE_FIELD_ID} [data-role="price-filter"]{--hkb-filter-accent:#16a34a}
+      #${PRICE_FIELD_ID} [data-role="official-filter"]{--hkb-filter-accent:#0284c7}
+      #${PRICE_FIELD_ID} [data-role$="-filter"]:hover{transform:translateY(-1px);border-color:color-mix(in oklab,var(--hkb-filter-accent) 30%,var(--border,hsl(20 5.9% 90%)));background:color-mix(in oklab,var(--hkb-filter-accent) 6%,var(--background,#fff));color:color-mix(in oklab,var(--hkb-filter-accent) 80%,var(--foreground,hsl(20 14.3% 4.1%)));box-shadow:0 3px 8px -5px color-mix(in oklab,var(--hkb-filter-accent) 55%,transparent)}
+      #${PRICE_FIELD_ID} [data-role$="-filter"]:active{transform:translateY(0)}
+      #${PRICE_FIELD_ID} [data-role$="-filter"]:focus-visible{outline:none;border-color:var(--hkb-filter-accent);box-shadow:0 0 0 3px color-mix(in oklab,var(--hkb-filter-accent) 22%,transparent)}
+      #${PRICE_FIELD_ID} [data-role$="-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--hkb-filter-accent) 45%,var(--border));background:color-mix(in oklab,var(--hkb-filter-accent) 12%,var(--background,#fff));color:var(--hkb-filter-accent);box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--hkb-filter-accent) 8%,transparent),0 3px 10px -7px var(--hkb-filter-accent)}
+      #${PRICE_FIELD_ID} [data-role$="-filter"][aria-pressed="true"]::before{opacity:1;box-shadow:0 0 0 3px color-mix(in oklab,var(--hkb-filter-accent) 16%,transparent)}
+      html.dark #${PRICE_FIELD_ID} [data-role$="-filter"]{background:color-mix(in oklab,var(--background) 78%,transparent);box-shadow:none}
+      html.dark #${PRICE_FIELD_ID} [data-role$="-filter"]:hover{background:color-mix(in oklab,var(--hkb-filter-accent) 12%,var(--background))}
+      html.dark #${PRICE_FIELD_ID} [data-role$="-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--hkb-filter-accent) 58%,var(--border));background:color-mix(in oklab,var(--hkb-filter-accent) 18%,var(--background));color:color-mix(in oklab,var(--hkb-filter-accent) 82%,white)}
       @media (min-width:1280px){.hkb-marketplace-filter-grid{grid-template-columns:repeat(6,minmax(0,1fr))!important}}
       [data-hub-tool-price-hidden="true"]{display:none!important}
+      td.${MULTIPLIER_COLUMN_CLASS}{box-sizing:border-box;padding-left:2px;padding-right:8px;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--primary,hsl(20 14.3% 4.1%));white-space:nowrap}
+      td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_LOW_TONE_CLASS}{color:var(--success,#16845d)}
+      td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_HIGH_TONE_CLASS}{color:var(--destructive,#dc2626)}
+      .${MULTIPLIER_COLUMN_HEADER_CLASS}{box-sizing:border-box;padding-left:2px;padding-right:8px;text-align:left;color:var(--muted-foreground,hsl(25 5.3% 44.7%));white-space:nowrap}
+      html.dark td.${MULTIPLIER_COLUMN_CLASS}{color:var(--primary,#e4e4e4)}
+      html.dark td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_LOW_TONE_CLASS}{color:#3fa266}
+      html.dark td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_HIGH_TONE_CLASS}{color:#fc6b83}
+      html.dark .${MULTIPLIER_COLUMN_HEADER_CLASS}{color:var(--muted-foreground,oklch(0.7713 0.0169 99.0657))}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgb(0 0 0 / .48);padding:16px;color:var(--foreground,#111827);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
       #${DIALOG_ID} .hkb-card{width:min(420px,100%);height:388px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
@@ -2214,6 +2431,8 @@ function escapeHtml(value) {
       findMarketplaceFilterFields,
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
+      filterMarketplacePayloadByOfficial,
+      channelIsOfficial,
       augmentChannelModelPricesPayload,
       ensurePricingFields,
       marketplaceChannelsScanUrl,
@@ -2225,9 +2444,12 @@ function escapeHtml(value) {
       withMarketplaceModelPricingFields,
       isTargetRoute,
       isRequestsConsumerRoute,
+      formatMultiplier,
+      multiplierTone,
       channelLabel,
       loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
+      __setOfficialFilterForTest: (value) => { selectedOfficialFilter = Boolean(value); },
       __setGraphqlForTest: setGraphqlRunnerForTest,
     };
   }

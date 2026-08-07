@@ -33,8 +33,29 @@
     response.clone().json().then((payload) => {
       const changed = rememberChannelsFromPayload(payload);
       rememberModelProviderPricesFromPayload(payload);
+      rememberRequestLogMultipliers(payload);
       if (changed) schedulePanel();
     }).catch(() => {});
+  }
+
+  function rememberRequestLogMultipliers(payload) {
+    const edges = payload?.data?.requests?.edges;
+    if (!Array.isArray(edges)) return;
+    for (const edge of edges) {
+      const node = edge?.node;
+      if (!node?.id) continue;
+      const usageLog = node?.usageLogs?.edges?.[0]?.node;
+      const lines = usageLog?.costExplanation?.lines;
+      if (!Array.isArray(lines)) continue;
+      const multiplier = lines.find((line) => line?.multiplier != null)?.multiplier;
+      if (multiplier == null) continue;
+      requestLogMultiplierCache.set(requestLogNumericID(node.id), multiplier);
+    }
+  }
+
+  function requestLogNumericID(requestID) {
+    const match = String(requestID || "").match(/gid:\/\/axonhub\/Request\/(\d+)$/);
+    return match ? Number(match[1]) : null;
   }
 
   function wrapMarketplaceChannelsResponse(input, init, response) {
@@ -56,13 +77,15 @@
       return augmentChannelModelPricesPayload(input, init, payload);
     }
     const mode = normalizePriceFilter(price);
-    if (mode === "all") return payload;
-    if (isMarketplaceChannelsUrl(requestUrl(input))) {
-      const filteredPayload = await loadFilteredMarketplaceChannelsPayload(input, init, payload, mode);
-      rememberChannelsFromPayload(filteredPayload);
-      return filteredPayload;
+    let filteredPayload = payload;
+    if (mode !== "all") {
+      if (isMarketplaceChannelsUrl(requestUrl(input))) {
+        filteredPayload = await loadFilteredMarketplaceChannelsPayload(input, init, filteredPayload, mode);
+      } else {
+        filteredPayload = await filterMarketplacePayloadByPrice(filteredPayload, mode);
+      }
     }
-    const filteredPayload = await filterMarketplacePayloadByPrice(payload, mode);
+    filteredPayload = filterMarketplacePayloadByOfficial(filteredPayload, selectedOfficialFilter);
     rememberChannelsFromPayload(filteredPayload);
     return filteredPayload;
   }

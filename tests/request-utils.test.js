@@ -13,6 +13,18 @@ async function main() {
   assert.equal(await helpers.readRequestBodyText(request), body);
   assert.equal(helpers.requestBodyText(request), body);
 
+  assert.equal(helpers.formatMultiplier(1), "1.0");
+  assert.equal(helpers.formatMultiplier(0.4), "0.4");
+  assert.equal(helpers.formatMultiplier(0.05), "0.05");
+  assert.equal(helpers.formatMultiplier(0.39999999999999997), "0.4");
+
+  assert.equal(helpers.multiplierTone(0.4), "low");
+  assert.equal(helpers.multiplierTone(1), "mid");
+  assert.equal(helpers.multiplierTone(2), "mid");
+  assert.equal(helpers.multiplierTone(2.4), "high");
+  assert.equal(helpers.multiplierTone("0.05"), "low");
+  assert.equal(helpers.multiplierTone(null), "mid");
+
   console.log("request utils helpers ok");
 }
 
@@ -20,4 +32,3 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-

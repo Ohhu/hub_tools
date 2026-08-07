@@ -103,6 +103,7 @@ function knownPayloadChannels(payload) {
       rememberImplicitFreeModelPageContext(channel, providerModelID, detail);
       const cacheKey = modelProviderCacheKey(channel.id, modelID);
       modelProviderPriceCache.set(cacheKey, detail.free);
+      modelProviderOfficialCache.set(cacheKey, channelIsOfficial(channel));
     }
   }
 
@@ -110,6 +111,12 @@ function knownPayloadChannels(payload) {
     if (!channel?.id) return null;
     const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
     return modelProviderPriceCache.has(key) ? modelProviderPriceCache.get(key) : null;
+  }
+
+  function modelProviderOfficialState(channel) {
+    if (!channel?.id) return null;
+    const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
+    return modelProviderOfficialCache.has(key) ? modelProviderOfficialCache.get(key) : null;
   }
 
   function modelProviderCacheKey(channelID, modelID) {
@@ -122,16 +129,19 @@ function knownPayloadChannels(payload) {
       id: String(channel.id),
       name: String(channel.name),
       type: channel.type,
+      usesOfficialBaseURL: channel.usesOfficialBaseURL,
       supportedModels: Array.isArray(channel.supportedModels) ? channel.supportedModels.slice() : undefined,
       priceSummary: channel.priceSummary,
     };
     const existing = channelCache.get(item.id);
     if (existing) {
       item.type ??= existing.type;
+      item.usesOfficialBaseURL ??= existing.usesOfficialBaseURL;
       item.supportedModels ??= existing.supportedModels;
       item.priceSummary ??= existing.priceSummary;
       if (existing.name === item.name
         && existing.type === item.type
+        && existing.usesOfficialBaseURL === item.usesOfficialBaseURL
         && sameStringArray(existing.supportedModels, item.supportedModels)
         && sameJsonValue(existing.priceSummary, item.priceSummary)) return false;
     }

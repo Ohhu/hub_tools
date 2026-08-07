@@ -78,6 +78,16 @@ function priceStateMatches(freeState, mode) {
   return mode === "free" ? freeState === true : freeState === false;
 }
 
+function channelIsOfficial(channel) {
+  if (typeof channel?.usesOfficialBaseURL === "boolean") return channel.usesOfficialBaseURL;
+  if (Array.isArray(channel?.tags)) {
+    if (channel.tags.some((tag) => tag === "official" || tag === "official:true")) return true;
+    if (channel.tags.includes("official:false")) return false;
+  }
+  if (typeof channel?.official === "boolean") return channel.official;
+  return false;
+}
+
 function marketplaceChannelFreeState(channel) {
   if (typeof channel?.priceSummary?.allFree === "boolean") return channel.priceSummary.allFree;
   return null;
