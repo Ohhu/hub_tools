@@ -540,10 +540,12 @@ function escapeHtml(value) {
       html.dark #${PRICE_FIELD_ID} [data-role$="-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--hkb-filter-accent) 58%,var(--border));background:color-mix(in oklab,var(--hkb-filter-accent) 18%,var(--background));color:color-mix(in oklab,var(--hkb-filter-accent) 82%,white)}
       @media (min-width:1280px){.hkb-marketplace-filter-grid{grid-template-columns:repeat(6,minmax(0,1fr))!important}}
       [data-hub-tool-price-hidden="true"]{display:none!important}
-      td.${MULTIPLIER_COLUMN_CLASS}{box-sizing:border-box;padding-left:2px;padding-right:8px;text-align:left;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--primary,hsl(20 14.3% 4.1%));white-space:nowrap}
+      th.${REQUEST_LOG_CHANNEL_COLUMN_CLASS},td.${REQUEST_LOG_CHANNEL_COLUMN_CLASS}{box-sizing:border-box;width:160px;max-width:160px}
+      td.${REQUEST_LOG_CHANNEL_COLUMN_CLASS},td.${REQUEST_LOG_CHANNEL_COLUMN_CLASS}>*{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      td.${MULTIPLIER_COLUMN_CLASS}{box-sizing:border-box;padding-left:6px;padding-right:6px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--primary,hsl(20 14.3% 4.1%));white-space:nowrap}
       td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_LOW_TONE_CLASS}{color:var(--success,#16845d)}
       td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_HIGH_TONE_CLASS}{color:var(--destructive,#dc2626)}
-      .${MULTIPLIER_COLUMN_HEADER_CLASS}{box-sizing:border-box;padding-left:2px;padding-right:8px;text-align:left;color:var(--muted-foreground,hsl(25 5.3% 44.7%));white-space:nowrap}
+      .${MULTIPLIER_COLUMN_HEADER_CLASS}{box-sizing:border-box;padding-left:6px;padding-right:6px;text-align:center;color:var(--muted-foreground,hsl(25 5.3% 44.7%));white-space:nowrap}
       html.dark td.${MULTIPLIER_COLUMN_CLASS}{color:var(--primary,#e4e4e4)}
       html.dark td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_LOW_TONE_CLASS}{color:#3fa266}
       html.dark td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_HIGH_TONE_CLASS}{color:#fc6b83}

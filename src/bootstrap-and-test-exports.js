@@ -83,6 +83,7 @@
       isRequestsConsumerRoute,
       formatMultiplier,
       multiplierTone,
+      constrainRequestLogChannelCell,
       channelLabel,
       loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },

@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const { loadHelpers } = require("./helpers/load-userscript");
+const { FakeElement } = require("./helpers/fake-dom");
 
 async function main() {
   const helpers = loadHelpers();
@@ -24,6 +25,11 @@ async function main() {
   assert.equal(helpers.multiplierTone(2.4), "high");
   assert.equal(helpers.multiplierTone("0.05"), "low");
   assert.equal(helpers.multiplierTone(null), "mid");
+
+  const channelCell = new FakeElement({ text: "  一个很长的渠道名称  " });
+  helpers.constrainRequestLogChannelCell(channelCell);
+  assert.equal(channelCell.classList.contains("linuxdo-hub-tool-request-channel-column"), true);
+  assert.equal(channelCell.getAttribute("title"), "一个很长的渠道名称");
 
   console.log("request utils helpers ok");
 }

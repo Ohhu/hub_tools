@@ -487,6 +487,7 @@ function injectRequestLogMultiplierColumn() {
     if (!cells.length) continue;
     const channelCell = cells[channelColumnIndex];
     if (!channelCell) continue;
+    constrainRequestLogChannelCell(channelCell);
     const targetIndex = channelColumnIndex + 1;
     const existingCell = targetIndex < cells.length ? cells[targetIndex] : null;
     if (existingCell?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) continue;
@@ -517,6 +518,7 @@ function ensureRequestLogMultiplierHeader(table, channelColumnIndex) {
   const headers = Array.from(table.querySelectorAll("thead th"));
   const channelHeader = headers[channelColumnIndex];
   if (!channelHeader) return;
+  channelHeader.classList.add(REQUEST_LOG_CHANNEL_COLUMN_CLASS);
   const targetIndex = channelColumnIndex + 1;
   const existingHeader = targetIndex < headers.length ? headers[targetIndex] : null;
   if (existingHeader?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) {
@@ -532,6 +534,13 @@ function ensureRequestLogMultiplierHeader(table, channelColumnIndex) {
   } else {
     channelHeader.parentElement.appendChild(header);
   }
+}
+
+function constrainRequestLogChannelCell(channelCell) {
+  if (!channelCell) return;
+  channelCell.classList.add(REQUEST_LOG_CHANNEL_COLUMN_CLASS);
+  const channelName = cleanText(channelCell.textContent);
+  if (channelName) channelCell.setAttribute("title", channelName);
 }
 
 function multiplierTone(multiplier) {

@@ -11,6 +11,7 @@ const MULTIPLIER_COLUMN_CLASS = `${PANEL_ID}-multiplier-column`;
 const MULTIPLIER_COLUMN_HEADER_CLASS = `${MULTIPLIER_COLUMN_CLASS}-header`;
 const MULTIPLIER_LOW_TONE_CLASS = `${MULTIPLIER_COLUMN_CLASS}-low`;
 const MULTIPLIER_HIGH_TONE_CLASS = `${MULTIPLIER_COLUMN_CLASS}-high`;
+const REQUEST_LOG_CHANNEL_COLUMN_CLASS = `${PANEL_ID}-request-channel-column`;
 const CHANNEL_NAME_LOOKUP_LIMIT = 20;
 const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
 const IMPLICIT_FREE_PRICE_LIMIT = 50;
@@ -99,4 +100,3 @@ function bodyValueText(value) {
 function isJsonResponse(response) {
   return String(response?.headers?.get?.("content-type") || "").includes("application/json");
 }
-
