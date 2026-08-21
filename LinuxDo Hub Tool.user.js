@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.4.1
+// @version      0.4.6
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -22,6 +22,9 @@ const CHANNEL_TRIGGER_CLASS = `${PANEL_ID}-channel-trigger`;
 const REQUEST_TRIGGER_CLASS = `${PANEL_ID}-request-trigger`;
 const DIALOG_ID = `${PANEL_ID}-dialog`;
 const PRICE_FIELD_ID = `${PANEL_ID}-price-field`;
+const MODEL_ID_FIELD_ID = `${PANEL_ID}-model-id-field`;
+const MODEL_ID_SELECT_ID = `${PANEL_ID}-model-id-select`;
+const MODEL_ID_ALL_VALUE = "__all__";
 const MULTIPLIER_TAG_CLASS = `${PANEL_ID}-multiplier-tag`;
 const MULTIPLIER_COLUMN_CLASS = `${PANEL_ID}-multiplier-column`;
 const MULTIPLIER_COLUMN_HEADER_CLASS = `${MULTIPLIER_COLUMN_CLASS}-header`;
@@ -32,6 +35,7 @@ const CHANNEL_NAME_LOOKUP_LIMIT = 20;
 const REACT_FIBER_CHANNEL_LOOKUP_LIMIT = 8;
 const IMPLICIT_FREE_PRICE_LIMIT = 50;
 const IMPLICIT_FREE_PRICE_ROW_PREFIX = "implicit-free";
+const MODEL_PRICE_ROW_MATCH_KINDS = ["exact", "prefixed", "dated"];
 const ZERO_WIDTH_RE = /[\u200b-\u200d\ufeff]/g;
 const WHITESPACE_RE = /\s+/g;
 const API_KEY_CREATE_ACTION_RE = /^(?:创建\s*API\s*密钥|Create\s*API\s*Key)$/i;
@@ -50,6 +54,9 @@ const modelProviderPriceCache = new Map();
 const modelProviderOfficialCache = new Map();
 const channelModelPricesCache = new Map();
 const modelPageImplicitFreeCache = new Map();
+const modelDatedVariantRECache = new Map();
+const modelProviderServedCache = new Map();
+const marketplaceModelIDOptions = [];
 const requestLogMultiplierCache = new Map();
 const requestBodyTextCache = new WeakMap();
 let meCache = null;
@@ -57,6 +64,8 @@ let keysCache = [];
 let selectedKeyID = "";
 let mountTimer = 0;
 let selectedPriceFilter = "all";
+let selectedMarketplaceModelID = "";
+let modelIDFilterPathname = "";
 let selectedOfficialFilter = false;
 let createdKeyValueCache = "";
 let lastMarketplaceChannelsFetchAt = 0;
@@ -239,6 +248,59 @@ function currentMarketplaceModelID() {
   }
 }
 
+function currentSelectedModelID() {
+  return selectedMarketplaceModelID && selectedMarketplaceModelID !== MODEL_ID_ALL_VALUE
+    ? selectedMarketplaceModelID
+    : currentMarketplaceModelID();
+}
+
+function isModelIDFilterAll() {
+  return selectedMarketplaceModelID === MODEL_ID_ALL_VALUE;
+}
+
+function providerServesModelID(channel, modelID) {
+  const supportedModels = Array.isArray(channel?.supportedModels) ? channel.supportedModels : null;
+  const prices = Array.isArray(channel?.channelModelPrices) ? channel.channelModelPrices : null;
+  const target = normalizeModelID(modelID);
+  if (supportedModels?.some((id) => normalizeModelID(id) === target)) return true;
+  if (prices?.some((row) => normalizeModelID(row?.modelID) === target)) return true;
+  if (supportedModels && supportedModels.length > 0) return false;
+  return true;
+}
+
+function buildMarketplaceModelIDOptions(providers, pageModelID) {
+  const normalizedPageModelID = normalizeModelID(pageModelID);
+  if (!normalizedPageModelID || !Array.isArray(providers)) return [];
+  const mentions = new Map();
+  for (const provider of providers) {
+    const channel = provider?.channel || {};
+    const seen = new Set();
+    for (const id of channel.supportedModels || []) seen.add(id);
+    for (const row of channel.channelModelPrices || []) seen.add(row?.modelID);
+    for (const id of seen) {
+      const kind = modelIDVariantKind(id, normalizedPageModelID);
+      if (!kind) continue;
+      const key = normalizeModelID(id);
+      const entry = mentions.get(key) || { value: String(id), kind, count: 0 };
+      entry.count += 1;
+      mentions.set(key, entry);
+    }
+  }
+  const kindOrder = { exact: 0, prefixed: 1, dated: 2 };
+  const options = [...mentions.entries()].map(([key, entry]) => ({
+    key,
+    value: kindOrder[entry.kind] === 0 ? pageModelID : entry.value,
+    kind: entry.kind,
+    serves: providers.filter((provider) => providerServesModelID(provider?.channel, key)).length,
+  }));
+  options.sort((a, b) =>
+    (b.serves - a.serves)
+    || (kindOrder[a.kind] - kindOrder[b.kind])
+    || a.key.localeCompare(b.key),
+  );
+  return options;
+}
+
 function marketplaceModelIDFromPayload(payload) {
   return payload?.data?.marketplaceModel?.modelID || currentMarketplaceModelID();
 }
@@ -384,7 +446,40 @@ function modelFreeInPriceRows(modelID, prices) {
 
 function findModelPriceRow(prices, modelID) {
   const normalizedModelID = normalizeModelID(modelID);
-  return (prices || []).find((price) => normalizeModelID(price?.modelID) === normalizedModelID) || null;
+  if (!normalizedModelID) return null;
+  const rows = Array.isArray(prices) ? prices : [];
+  for (const kind of MODEL_PRICE_ROW_MATCH_KINDS) {
+    const row = rows.find((price) => modelPriceRowMatchKind(price, normalizedModelID) === kind);
+    if (row) return row;
+  }
+  return null;
+}
+
+function hasModelPriceRowFor(prices, modelID) {
+  return Boolean(findModelPriceRow(prices, modelID));
+}
+
+function modelPriceRowMatchKind(price, normalizedModelID) {
+  return modelIDVariantKind(price?.modelID, normalizedModelID);
+}
+
+function modelIDVariantKind(candidateID, normalizedModelID) {
+  const candidate = normalizeModelID(candidateID);
+  if (!candidate || !normalizedModelID) return "";
+  if (candidate === normalizedModelID) return "exact";
+  if (candidate.endsWith(`/${normalizedModelID}`)) return "prefixed";
+  if (modelDatedVariantRE(normalizedModelID).test(candidate)) return "dated";
+  return "";
+}
+
+function modelDatedVariantRE(normalizedModelID) {
+  let pattern = modelDatedVariantRECache.get(normalizedModelID);
+  if (!pattern) {
+    const escaped = normalizedModelID.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    pattern = new RegExp(`^${escaped}-\\d{3,4}$`);
+    modelDatedVariantRECache.set(normalizedModelID, pattern);
+  }
+  return pattern;
 }
 
 function rememberImplicitFreeModelPageContext(channel, modelID, detail) {
@@ -642,9 +737,8 @@ function implicitFreePriceRowsForCurrentSearch(channelID, prices) {
   if (!channel?.priceSummary?.hasPrices) return [];
   const supportedModels = matchedSupportedModels(channel, search);
   if (!supportedModels.length) return [];
-  const existing = existingModelPriceIDSet(prices);
   return supportedModels
-    .filter((modelID) => !existing.has(normalizeModelID(modelID)))
+    .filter((modelID) => !hasModelPriceRowFor(prices, modelID))
     .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
     .map((modelID) => createImplicitFreePriceRow(channelID, modelID));
 }
@@ -654,12 +748,7 @@ function implicitFreePriceRowsForCurrentModelPage(channelID, prices) {
   if (currentPriceFilter() !== "free") return [];
   const modelID = currentMarketplaceModelID();
   if (!modelID || !hasModelPageImplicitFree(channelID, modelID)) return [];
-  const existing = existingModelPriceIDSet(prices);
-  return existing.has(normalizeModelID(modelID)) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
-}
-
-function existingModelPriceIDSet(prices) {
-  return new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+  return hasModelPriceRowFor(prices, modelID) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
 }
 
 function createImplicitFreePriceRow(channelID, modelID) {
@@ -915,13 +1004,38 @@ function knownPayloadChannels(payload) {
       const cacheKey = modelProviderCacheKey(channel.id, modelID);
       modelProviderPriceCache.set(cacheKey, detail.free);
       modelProviderOfficialCache.set(cacheKey, channelIsOfficial(channel));
+      modelProviderServedCache.set(channelCacheKey(channel.id), {
+        supportedModels: Array.isArray(channel.supportedModels) ? channel.supportedModels : null,
+        channelModelPrices: Array.isArray(channel.channelModelPrices) ? channel.channelModelPrices : null,
+      });
     }
+    replaceMarketplaceModelIDOptions(buildMarketplaceModelIDOptions(providers, modelID));
+  }
+
+  function replaceMarketplaceModelIDOptions(options) {
+    const signature = JSON.stringify(options);
+    if (marketplaceModelIDOptions.__signature === signature) return;
+    marketplaceModelIDOptions.__signature = signature;
+    marketplaceModelIDOptions.length = 0;
+    marketplaceModelIDOptions.push(...options);
+    syncModelIDFilterField(document.getElementById(MODEL_ID_FIELD_ID));
   }
 
   function modelProviderFreeState(channel) {
     if (!channel?.id) return null;
-    const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
-    return modelProviderPriceCache.has(key) ? modelProviderPriceCache.get(key) : null;
+    const modelID = currentSelectedModelID();
+    const key = modelProviderCacheKey(channel.id, modelID);
+    if (modelProviderPriceCache.has(key)) return modelProviderPriceCache.get(key);
+    const served = modelProviderServedCache.get(channelCacheKey(channel.id));
+    if (!served) return null;
+    return channelFreeStateForModelDetail(served, modelID).free;
+  }
+
+  function providerServesSelectedModelID(channel) {
+    if (!channel?.id) return true;
+    const served = modelProviderServedCache.get(channelCacheKey(channel.id));
+    if (!served) return true;
+    return providerServesModelID(served, currentSelectedModelID());
   }
 
   function modelProviderOfficialState(channel) {
@@ -1188,11 +1302,13 @@ function insertPriceFilter() {
   if (!location.pathname.startsWith("/marketplace")) {
     resetPriceFilterState();
     removePriceFilterField();
+    removeModelIDFilterField();
     return;
   }
   const anchors = findMarketplaceFilterFields();
   if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
     removePriceFilterField();
+    removeModelIDFilterField();
     return;
   }
   const filterAnchor = anchors.health || anchors.sort || anchors.tags;
@@ -1202,6 +1318,7 @@ function insertPriceFilter() {
   const previousParent = field.parentElement;
   const filterGrid = movePriceFilterToEndOfGrid(filterAnchor, field);
   if (!filterGrid) return;
+  ensureModelIDFilterField(filterGrid);
   if (previousParent && previousParent !== filterGrid) {
     previousParent.classList?.remove?.("hkb-marketplace-filter-grid");
   }
@@ -1286,6 +1403,132 @@ function hasFilterControl(field) {
 
 function currentOfficialFilter() {
   return selectedOfficialFilter;
+}
+
+function createModelIDFilterField() {
+  const field = document.createElement("div");
+  field.id = MODEL_ID_FIELD_ID;
+  field.className = "space-y-1";
+  field.dataset.hubToolModelIDFilter = "true";
+  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">模型 ID</p>
+    <div class="hkb-model-id-wrap">
+      <button type="button" id="${MODEL_ID_SELECT_ID}" class="hkb-model-id-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="按模型 ID 筛选渠道">
+        <span class="hkb-model-id-value">全部（不过滤）</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+      <div class="hkb-model-id-menu" role="listbox" aria-label="模型 ID 选项" hidden></div>
+    </div>`;
+  field.querySelector("button").addEventListener("click", handleModelIDTriggerClick);
+  field.querySelector("[role=\"listbox\"]").addEventListener("click", handleModelIDOptionClick);
+  ensureModelIDMenuGlobalHandler();
+  return field;
+}
+
+function syncModelIDFilterField(field) {
+  if (!field) return;
+  const trigger = field.querySelector(`#${MODEL_ID_SELECT_ID}`);
+  const menu = field.querySelector('[role="listbox"]');
+  if (!trigger || !menu) return;
+  const options = marketplaceModelIDOptions;
+  const nextValue = isModelIDFilterAll() ? MODEL_ID_ALL_VALUE : currentSelectedModelID();
+  const nextSignature = `${options.__signature || ""}|${nextValue}`;
+  const wrap = trigger.parentElement;
+  if (wrap.dataset.hubToolSignature === nextSignature) return;
+  wrap.dataset.hubToolSignature = nextSignature;
+  const optionLabel = (option) => `${option.value}（${option.serves}）`;
+  const selected = options.find((option) => option.value === nextValue);
+  const label = nextValue === MODEL_ID_ALL_VALUE ? "全部（不过滤）" : selected ? optionLabel(selected) : nextValue;
+  trigger.querySelector(".hkb-model-id-value").textContent = label;
+  trigger.title = label;
+  menu.textContent = "";
+  const entries = [{ value: MODEL_ID_ALL_VALUE, label: "全部（不过滤）" },
+    ...options.map((option) => ({ value: option.value, label: optionLabel(option) }))];
+  for (const entry of entries) {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.className = "hkb-model-id-option";
+    element.setAttribute("role", "option");
+    element.dataset.value = entry.value;
+    element.setAttribute("aria-selected", String(entry.value === nextValue));
+    element.innerHTML = `<span></span>`;
+    element.querySelector("span").textContent = entry.label;
+    menu.append(element);
+  }
+}
+
+function handleModelIDTriggerClick(event) {
+  const trigger = event.currentTarget;
+  const menu = trigger.parentElement.querySelector('[role="listbox"]');
+  if (!menu) return;
+  const open = menu.hidden;
+  closeAllModelIDMenus();
+  setModelIDMenuOpen(menu, open);
+}
+
+function handleModelIDOptionClick(event) {
+  const option = event.target?.closest?.("[data-value]");
+  if (!option) return;
+  const menu = event.currentTarget;
+  setModelIDMenuOpen(menu, false);
+  const value = option.dataset.value || "";
+  setModelIDFilter(value === currentMarketplaceModelID() ? "" : value);
+}
+
+function setModelIDMenuOpen(menu, open) {
+  menu.hidden = !open;
+  menu.parentElement?.querySelector(`#${MODEL_ID_SELECT_ID}`)?.setAttribute("aria-expanded", String(open));
+}
+
+function closeAllModelIDMenus() {
+  document.querySelectorAll(`#${MODEL_ID_FIELD_ID} [role="listbox"]`).forEach((menu) => {
+    if (!menu.hidden) setModelIDMenuOpen(menu, false);
+  });
+}
+
+function ensureModelIDMenuGlobalHandler() {
+  if (ensureModelIDMenuGlobalHandler.bound) return;
+  ensureModelIDMenuGlobalHandler.bound = true;
+  document.addEventListener("click", (event) => {
+    document.querySelectorAll(`#${MODEL_ID_FIELD_ID} .hkb-model-id-wrap`).forEach((wrap) => {
+      const menu = wrap.querySelector('[role="listbox"]');
+      if (menu && !menu.hidden && !wrap.contains(event.target)) setModelIDMenuOpen(menu, false);
+    });
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeAllModelIDMenus();
+  }, true);
+}
+
+function setModelIDFilter(value) {
+  const next = value === MODEL_ID_ALL_VALUE ? MODEL_ID_ALL_VALUE : String(value || "");
+  if (next === selectedMarketplaceModelID) return;
+  selectedMarketplaceModelID = next;
+  syncModelIDFilterField(document.getElementById(MODEL_ID_FIELD_ID));
+  applyVisiblePriceFilter();
+}
+
+function syncModelIDFilterPageContext() {
+  const isModelPage = location.pathname.startsWith("/marketplace/models/");
+  const current = isModelPage ? location.pathname : "";
+  if (current === modelIDFilterPathname) return;
+  modelIDFilterPathname = current;
+  selectedMarketplaceModelID = "";
+  syncModelIDFilterField(document.getElementById(MODEL_ID_FIELD_ID));
+}
+
+function ensureModelIDFilterField(filterGrid) {
+  if (!location.pathname.startsWith("/marketplace/models/")) {
+    removeModelIDFilterField();
+    return;
+  }
+  let field = document.getElementById(MODEL_ID_FIELD_ID);
+  if (!field) field = createModelIDFilterField();
+  if (field.parentElement !== filterGrid) filterGrid.append(field);
+  syncModelIDFilterField(field);
+}
+
+function removeModelIDFilterField() {
+  document.getElementById(MODEL_ID_FIELD_ID)?.remove?.();
 }
 
 function createPriceFilterField() {
@@ -1426,6 +1669,7 @@ function applyVisiblePriceFilter() {
   if (!location.pathname.startsWith("/marketplace/models/")) return;
   const mode = currentPriceFilter();
   const official = currentOfficialFilter();
+  const idFilterEnabled = !isModelIDFilterAll();
   for (const button of findChannelActionButtons()) {
     const context = findChannelContext(button);
     const channel = findActionButtonChannel(button);
@@ -1433,7 +1677,8 @@ function applyVisiblePriceFilter() {
     const officialState = modelProviderOfficialState(channel);
     const priceHidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
     const officialHidden = official && officialState === false;
-    const hidden = priceHidden || officialHidden;
+    const idHidden = idFilterEnabled && !providerServesSelectedModelID(channel);
+    const hidden = priceHidden || officialHidden || idHidden;
     if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
   }
 }
@@ -1577,6 +1822,7 @@ function createRequestEditTrigger(anchor) {
 }
 
 function ensurePanel() {
+  syncModelIDFilterPageContext();
   injectStyle();
   replaceApiKeyActionButtons();
   removeMarketplaceVerificationButtons();
@@ -2146,6 +2392,26 @@ function escapeHtml(value) {
       html.dark .${CHANNEL_TRIGGER_CLASS}{border-color:color-mix(in oklab,var(--primary) 34%,var(--border));background:color-mix(in oklab,var(--primary) 12%,transparent);color:color-mix(in oklab,var(--primary) 82%,white)}
       html.dark .${CHANNEL_TRIGGER_CLASS}:hover{border-color:color-mix(in oklab,var(--primary) 52%,var(--border));background:color-mix(in oklab,var(--primary) 20%,transparent)}
       #${PRICE_FIELD_ID}{box-sizing:border-box;min-width:0;order:2147483647}
+      #${MODEL_ID_FIELD_ID}{box-sizing:border-box;min-width:0;order:2147483646}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-wrap{position:relative;width:fit-content;max-width:260px;min-width:0}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger{box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:8px;width:fit-content;max-width:100%;height:36px;min-height:36px;border:1px solid var(--input,var(--border,hsl(20 5.9% 90%)));border-radius:12px;background:transparent;color:var(--foreground,hsl(20 14.3% 4.1%));padding:8px 12px;font:inherit;font-size:14px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer;outline:none;box-shadow:0 1px 3px 0 rgb(176 93 46 / .04);transition:border-color .15s ease,box-shadow .15s ease,background-color .15s ease}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger:hover{border-color:color-mix(in oklab,var(--ring,var(--primary,hsl(20 14.3% 4.1%))) 40%,var(--input,var(--border,hsl(20 5.9% 90%))))}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger:focus-visible,#${MODEL_ID_FIELD_ID} .hkb-model-id-trigger[aria-expanded="true"]{border-color:var(--ring,var(--primary,hsl(20 14.3% 4.1%)));box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,var(--primary,hsl(20 14.3% 4.1%))) 18%,transparent)}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger svg{width:16px;height:16px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.5;pointer-events:none;transition:transform .15s ease}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger[aria-expanded="true"] svg{transform:rotate(180deg)}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-menu{position:absolute;left:0;top:calc(100% + 6px);z-index:60;width:max-content;min-width:100%;max-width:min(340px,90vw);max-height:264px;overflow:auto;margin:0;padding:6px;list-style:none;background:var(--popover,var(--card,#fff));border:1px solid var(--border,rgba(229,231,235,.9));border-radius:12px;box-shadow:0 18px 48px -24px rgb(15 23 42 / .55),0 8px 20px -18px rgb(15 23 42 / .45);color:var(--popover-foreground,var(--foreground,#111827))}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-menu[hidden]{display:none}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-option{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;border:none;border-radius:8px;background:transparent;color:inherit;text-align:left;padding:8px 10px;font:inherit;font-size:14px;font-weight:500;line-height:20px;cursor:pointer}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-option:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-option[aria-selected="true"]{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-option[aria-selected="true"]::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700;flex-shrink:0}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-option:not([aria-selected="true"])::before{content:"";width:12px;flex-shrink:0}
+      #${MODEL_ID_FIELD_ID} .hkb-model-id-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      html.dark #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger{border-color:var(--input,var(--border));color:var(--foreground,#e4e4e4)}
+      html.dark #${MODEL_ID_FIELD_ID} .hkb-model-id-trigger:hover{background:color-mix(in oklab,var(--input,rgb(255 255 255/.09)) 50%,transparent)}
+      html.dark #${MODEL_ID_FIELD_ID} .hkb-model-id-menu{background:var(--popover,var(--card,#1c1c1c));border-color:var(--border,rgb(255 255 255/.09));color:var(--popover-foreground,var(--foreground,#e4e4e4))}
+      html.dark #${MODEL_ID_FIELD_ID} .hkb-model-id-option:hover,html.dark #${MODEL_ID_FIELD_ID} .hkb-model-id-option[aria-selected="true"]{background:var(--accent,rgb(255 255 255/.08));color:var(--accent-foreground,var(--foreground,#e4e4e4))}
       #${PRICE_FIELD_ID} .hkb-filter-buttons{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-height:32px}
       #${PRICE_FIELD_ID} [data-role$="-filter"]{--hkb-filter-accent:var(--primary,hsl(20 14.3% 4.1%));box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:7px;width:fit-content;max-width:100%;height:32px;min-height:32px;border:1px solid var(--border,hsl(20 5.9% 90%));border-radius:999px;background:color-mix(in oklab,var(--background,#fff) 92%,transparent);color:var(--muted-foreground,hsl(25 5.3% 44.7%));padding:5px 12px;font:inherit;font-size:13px;font-weight:550;line-height:20px;white-space:nowrap;cursor:pointer;box-shadow:0 1px 1px rgb(0 0 0 / .025);pointer-events:auto;transition:transform .15s ease,color .15s ease,background-color .15s ease,border-color .15s ease,box-shadow .15s ease}
       #${PRICE_FIELD_ID} [data-role$="-filter"]::before{content:"";width:6px;height:6px;border-radius:999px;background:currentColor;opacity:.35;box-shadow:0 0 0 2px color-mix(in oklab,currentColor 10%,transparent);transition:opacity .15s ease,box-shadow .15s ease}
@@ -2159,7 +2425,7 @@ function escapeHtml(value) {
       html.dark #${PRICE_FIELD_ID} [data-role$="-filter"]{background:color-mix(in oklab,var(--background) 78%,transparent);box-shadow:none}
       html.dark #${PRICE_FIELD_ID} [data-role$="-filter"]:hover{background:color-mix(in oklab,var(--hkb-filter-accent) 12%,var(--background))}
       html.dark #${PRICE_FIELD_ID} [data-role$="-filter"][aria-pressed="true"]{border-color:color-mix(in oklab,var(--hkb-filter-accent) 58%,var(--border));background:color-mix(in oklab,var(--hkb-filter-accent) 18%,var(--background));color:color-mix(in oklab,var(--hkb-filter-accent) 82%,white)}
-      @media (min-width:1280px){.hkb-marketplace-filter-grid{grid-template-columns:repeat(6,minmax(0,1fr))!important}}
+      @media (min-width:1280px){.hkb-marketplace-filter-grid{grid-template-columns:repeat(6,minmax(0,auto))!important}}
       [data-hub-tool-price-hidden="true"]{display:none!important}
       th.${REQUEST_LOG_CHANNEL_COLUMN_CLASS},td.${REQUEST_LOG_CHANNEL_COLUMN_CLASS}{box-sizing:border-box;width:160px;max-width:160px}
       td.${REQUEST_LOG_CHANNEL_COLUMN_CLASS},td.${REQUEST_LOG_CHANNEL_COLUMN_CLASS}>*{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2444,6 +2710,12 @@ function escapeHtml(value) {
       isMarketplaceChannelsTabActive,
       filterMarketplacePayloadByPrice,
       filterMarketplacePayloadByOfficial,
+      findModelPriceRow,
+      channelFreeStateForModelDetail,
+      providerServesModelID,
+      buildMarketplaceModelIDOptions,
+      modelIDVariantKind,
+      currentSelectedModelID,
       channelIsOfficial,
       augmentChannelModelPricesPayload,
       ensurePricingFields,
@@ -2462,6 +2734,7 @@ function escapeHtml(value) {
       channelLabel,
       loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
+      __setModelIDFilterForTest: (value) => { selectedMarketplaceModelID = String(value || ""); },
       __setOfficialFilterForTest: (value) => { selectedOfficialFilter = Boolean(value); },
       __setGraphqlForTest: setGraphqlRunnerForTest,
     };

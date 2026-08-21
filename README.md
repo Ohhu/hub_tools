@@ -1,6 +1,6 @@
 # LinuxDo Hub Tool
 
-LinuxDo Hub Tool 是一个用于 [Hub](https://hub.linux.do/) 的 Tampermonkey / 油猴脚本。它提供密钥的渠道绑定快捷操作，并支持资源市场的免费渠道筛选。
+LinuxDo Hub Tool 是一个用于 [Hub](https://hub.linux.do/) 的 Tampermonkey / 油猴脚本。它提供密钥的渠道绑定快捷操作，并支持资源市场的免费渠道筛选与模型 ID 变体筛选（模型页默认只保留服务精确模型 id 的渠道）。
 
 仓库中的源码已经拆分到 `src/`，根目录的 `LinuxDo Hub Tool.user.js` 是生成后的最终油猴单文件产物。
 

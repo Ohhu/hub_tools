@@ -25,12 +25,15 @@ assert.equal(source.includes("createdKeyValueCache"), true);
 assert.equal(source.includes("data-panel="), false);
 assert.equal(source.includes("data-key-panel="), true);
 assert.equal(source.includes("data-action-panel="), true);
-assert.equal(source.includes("<select"), false);
+assert.equal(source.includes("<select"), false); // 全站禁用原生 select，模型 ID 下拉也用自定义实现
+  assert.equal(source.includes("hkb-model-id-trigger"), true);
+  assert.equal(source.includes("hkb-model-id-menu"), true);
+  assert.equal(source.includes('aria-haspopup="listbox"'), true);
 assert.equal(source.includes('data-role="key-trigger"'), true);
 assert.equal(source.includes('data-role="key-menu"'), true);
 assert.equal(source.includes('data-action="select-key"'), true);
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.4.1"), true);
+assert.equal(source.includes("// @version      0.4.6"), true);
 assert.equal(source.includes("getKeyValue:"), true);
 assert.equal(source.includes("getKeys: \"query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name}cursor}pageInfo{hasNextPage endCursor}totalCount}}\""), true);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), false);
@@ -83,7 +86,7 @@ assert.equal(source.includes('[data-role$="-filter"]'), true);
 assert.equal(source.includes('[data-role="official-filter"]{--hkb-filter-accent:#0284c7}'), true);
 assert.equal(source.includes("font-variant-numeric:tabular-nums"), true);
 assert.equal(source.includes("hkb-marketplace-filter-grid"), true);
-assert.equal(source.includes("grid-template-columns:repeat(6,minmax(0,1fr))"), true);
+assert.equal(source.includes("grid-template-columns:repeat(6,minmax(0,auto))"), true);
 assert.equal(source.includes("order:2147483647"), true);
 assert.equal(source.includes('searchParams.set("price"'), false);
 assert.equal(source.includes('searchParams.get("price"'), false);
@@ -458,18 +461,25 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
 
 {
   helpers.__location.pathname = "/marketplace/models/gpt-5.4";
-  helpers.__setPriceFilterForTest("free");
   const payload = {
     data: {
       marketplaceModel: {
         modelID: "gpt-5.4",
         providers: [
+          { modelID: "gpt-5.4", channel: { name: "exact-paid", channelModelPrices: [{ modelID: "gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "100" } }] } }] } },
+          { modelID: "gpt-5.4", channel: { name: "prefixed-paid", channelModelPrices: [{ modelID: "openai/gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "100" } }] } }] } },
+          { modelID: "gpt-5.4", channel: { name: "prefixed-free", channelModelPrices: [{ modelID: "openai/gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "0" } }] } }] } },
+          { modelID: "gpt-5.4", channel: { name: "dated-paid", channelModelPrices: [{ modelID: "gpt-5.4-0731", price: { items: [{ pricing: { usagePerUnit: "1" } }] } }] } },
+          { modelID: "gpt-5.4", channel: { name: "no-rows", channelModelPrices: [] } },
+          { modelID: "gpt-5.4", channel: { name: "other-rows-only", channelModelPrices: [{ modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } }] } },
+          { modelID: "gpt-5.4", channel: { name: "all-free-rows", channelModelPrices: [{ modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "0" } }] } }] } },
           {
+            modelID: "gpt-5.4",
             channel: {
-              id: "gid://axonhub/Channel/12345",
-              name: "implicit-current-free",
+              name: "exact-wins-over-prefixed",
               channelModelPrices: [
-                { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } },
+                { modelID: "openai/gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "100" } }] } },
+                { modelID: "gpt-5.4", price: { items: [{ pricing: { usagePerUnit: "0" } }] } },
               ],
             },
           },
@@ -479,9 +489,61 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
   };
   assert.deepEqual(
     plain(await helpers.filterMarketplacePayloadByPrice(payload, "free")).data.marketplaceModel.providers.map((item) => item.channel.name),
-    ["implicit-current-free"],
+    ["prefixed-free", "no-rows", "other-rows-only", "all-free-rows", "exact-wins-over-prefixed"],
   );
-  const augmented = helpers.augmentChannelModelPricesPayload(null, null, {
+  assert.deepEqual(
+    plain(await helpers.filterMarketplacePayloadByPrice(payload, "paid")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    ["exact-paid", "prefixed-paid", "dated-paid"],
+  );
+  helpers.__location.pathname = "/marketplace";
+}
+
+{
+  assert.equal(helpers.findModelPriceRow([{ modelID: "gpt-5.4" }], "GPT-5.4")?.modelID, "gpt-5.4");
+  assert.equal(helpers.findModelPriceRow([{ modelID: "openai/gpt-5.4" }], "gpt-5.4")?.modelID, "openai/gpt-5.4");
+  assert.equal(helpers.findModelPriceRow([{ modelID: "gpt-5.4-0731" }], "gpt-5.4")?.modelID, "gpt-5.4-0731");
+  assert.equal(helpers.findModelPriceRow([{ modelID: "gpt-5x5-0731" }], "gpt-5.5"), null);
+  assert.equal(helpers.findModelPriceRow([{ modelID: "gpt-5.4-pro" }], "gpt-5.4"), null);
+  assert.equal(helpers.findModelPriceRow([{ modelID: "deepseek-v4-flash-free" }], "deepseek-v4-flash"), null);
+  assert.equal(helpers.findModelPriceRow([], "gpt-5.4"), null);
+  assert.deepEqual(plain(helpers.channelFreeStateForModelDetail({ channelModelPrices: [{ modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } }] }, "gpt-5.4")), { free: true, reason: "implicit_missing_row" });
+}
+
+{
+  helpers.__location.pathname = "/marketplace/models/gpt-5.4";
+  helpers.__setPriceFilterForTest("free");
+  const payload = {
+    data: {
+      marketplaceModel: {
+        modelID: "gpt-5.4",
+        providers: [
+          {
+            channel: {
+              id: "gid://axonhub/Channel/12345",
+              name: "unmapped-paid-channel",
+              channelModelPrices: [
+                { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "100" } }] } },
+              ],
+            },
+          },
+          {
+            channel: {
+              id: "gid://axonhub/Channel/12346",
+              name: "implicit-current-free",
+              channelModelPrices: [
+                { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "0" } }] } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  };
+  assert.deepEqual(
+    plain(await helpers.filterMarketplacePayloadByPrice(payload, "free")).data.marketplaceModel.providers.map((item) => item.channel.name),
+    ["unmapped-paid-channel", "implicit-current-free"],
+  );
+  const otherModelAugmented = helpers.augmentChannelModelPricesPayload(null, null, {
     data: {
       node: {
         id: "gid://axonhub/Channel/12345",
@@ -491,8 +553,20 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
       },
     },
   });
+  assert.equal(otherModelAugmented.data.node.channelModelPrices.length, 2);
+  assert.equal(otherModelAugmented.data.node.channelModelPrices[0].id, "implicit-free:12345:gpt-5.4");
+  const augmented = helpers.augmentChannelModelPricesPayload(null, null, {
+    data: {
+      node: {
+        id: "gid://axonhub/Channel/12346",
+        channelModelPrices: [
+          { modelID: "gpt-5.5", price: { items: [{ pricing: { usagePerUnit: "0" } }] } },
+        ],
+      },
+    },
+  });
   const rows = augmented.data.node.channelModelPrices;
-  assert.equal(rows[0].id, "implicit-free:12345:gpt-5.4");
+  assert.equal(rows[0].id, "implicit-free:12346:gpt-5.4");
   assert.equal(rows[0].modelID, "gpt-5.4");
   assert.equal(rows[0].price.items.every((item) => item.pricing.usagePerUnit === 0), true);
   helpers.__setPriceFilterForTest("all");
@@ -626,6 +700,46 @@ assert.deepEqual(plain(helpers.moveChannelIDToIndex([5638, 29812, 42], 99, 1)), 
   helpers.__location.search = "?view=producer";
   assert.equal(helpers.isRequestsConsumerRoute(), false);
   helpers.__location.search = "";
+}
+
+{
+  assert.equal(helpers.modelIDVariantKind("deepseek-v4-flash", "deepseek-v4-flash"), "exact");
+  assert.equal(helpers.modelIDVariantKind("DeepSeek-V4-Flash", "deepseek-v4-flash"), "exact");
+  assert.equal(helpers.modelIDVariantKind("deepseek-ai/deepseek-v4-flash", "deepseek-v4-flash"), "prefixed");
+  assert.equal(helpers.modelIDVariantKind("deepseek-v4-flash-0731", "deepseek-v4-flash"), "dated");
+  assert.equal(helpers.modelIDVariantKind("deepseek-v4-flash-free", "deepseek-v4-flash"), "");
+  assert.equal(helpers.modelIDVariantKind("deepseek-v4-flash1", "deepseek-v4-flash"), "");
+  assert.equal(helpers.modelIDVariantKind("gpt-5.4-pro", "gpt-5.4"), "");
+}
+
+{
+  const channel = (supportedModels, rows) => ({ supportedModels, channelModelPrices: rows });
+  assert.equal(helpers.providerServesModelID(channel(["deepseek-v4-flash"], []), "deepseek-v4-flash"), true);
+  assert.equal(helpers.providerServesModelID(channel(["deepseek-ai/deepseek-v4-flash"], []), "deepseek-v4-flash"), false);
+  assert.equal(helpers.providerServesModelID(channel(["deepseek-v4-flash-free"], []), "deepseek-v4-flash"), false);
+  assert.equal(helpers.providerServesModelID(channel([], [{ modelID: "deepseek-v4-flash" }]), "deepseek-v4-flash"), true);
+  assert.equal(helpers.providerServesModelID(channel(null, [{ modelID: "deepseek-v4-flash-0731" }]), "deepseek-v4-flash"), true);
+  assert.equal(helpers.providerServesModelID(channel(null, [{ modelID: "deepseek-chat" }]), "deepseek-v4-flash"), true);
+  assert.equal(helpers.providerServesModelID(channel([], []), "deepseek-v4-flash"), true);
+  assert.equal(helpers.providerServesModelID(null, "deepseek-v4-flash"), true);
+}
+
+{
+  const providers = [
+    { channel: { supportedModels: ["deepseek-v4-flash", "deepseek-chat"] } },
+    { channel: { supportedModels: ["Deepseek-v4-flash"] } },
+    { channel: { supportedModels: ["deepseek-ai/deepseek-v4-flash"] } },
+    { channel: { supportedModels: ["deepseek-v4-flash-0731", "deepseek-v4-flash"] } },
+    { channel: { channelModelPrices: [{ modelID: "deepseek-v4-flash-0731" }] } },
+    { channel: { supportedModels: ["deepseek-v4-flash-0731"] } },
+  ];
+  const options = plain(helpers.buildMarketplaceModelIDOptions(providers, "deepseek-v4-flash"));
+  assert.deepEqual(options.map((option) => [option.value, option.kind, option.serves]), [
+    ["deepseek-v4-flash", "exact", 4],
+    ["deepseek-v4-flash-0731", "dated", 3], // 数量降序：dated(3) 排在 prefixed(2) 之前
+    ["deepseek-ai/deepseek-v4-flash", "prefixed", 2],
+  ]);
+  assert.deepEqual(plain(helpers.buildMarketplaceModelIDOptions([], "")), []);
 }
 
 console.log("minimal binder helpers ok");

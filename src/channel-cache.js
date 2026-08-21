@@ -104,13 +104,38 @@ function knownPayloadChannels(payload) {
       const cacheKey = modelProviderCacheKey(channel.id, modelID);
       modelProviderPriceCache.set(cacheKey, detail.free);
       modelProviderOfficialCache.set(cacheKey, channelIsOfficial(channel));
+      modelProviderServedCache.set(channelCacheKey(channel.id), {
+        supportedModels: Array.isArray(channel.supportedModels) ? channel.supportedModels : null,
+        channelModelPrices: Array.isArray(channel.channelModelPrices) ? channel.channelModelPrices : null,
+      });
     }
+    replaceMarketplaceModelIDOptions(buildMarketplaceModelIDOptions(providers, modelID));
+  }
+
+  function replaceMarketplaceModelIDOptions(options) {
+    const signature = JSON.stringify(options);
+    if (marketplaceModelIDOptions.__signature === signature) return;
+    marketplaceModelIDOptions.__signature = signature;
+    marketplaceModelIDOptions.length = 0;
+    marketplaceModelIDOptions.push(...options);
+    syncModelIDFilterField(document.getElementById(MODEL_ID_FIELD_ID));
   }
 
   function modelProviderFreeState(channel) {
     if (!channel?.id) return null;
-    const key = modelProviderCacheKey(channel.id, currentMarketplaceModelID());
-    return modelProviderPriceCache.has(key) ? modelProviderPriceCache.get(key) : null;
+    const modelID = currentSelectedModelID();
+    const key = modelProviderCacheKey(channel.id, modelID);
+    if (modelProviderPriceCache.has(key)) return modelProviderPriceCache.get(key);
+    const served = modelProviderServedCache.get(channelCacheKey(channel.id));
+    if (!served) return null;
+    return channelFreeStateForModelDetail(served, modelID).free;
+  }
+
+  function providerServesSelectedModelID(channel) {
+    if (!channel?.id) return true;
+    const served = modelProviderServedCache.get(channelCacheKey(channel.id));
+    if (!served) return true;
+    return providerServesModelID(served, currentSelectedModelID());
   }
 
   function modelProviderOfficialState(channel) {

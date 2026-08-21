@@ -193,9 +193,8 @@ function implicitFreePriceRowsForCurrentSearch(channelID, prices) {
   if (!channel?.priceSummary?.hasPrices) return [];
   const supportedModels = matchedSupportedModels(channel, search);
   if (!supportedModels.length) return [];
-  const existing = existingModelPriceIDSet(prices);
   return supportedModels
-    .filter((modelID) => !existing.has(normalizeModelID(modelID)))
+    .filter((modelID) => !hasModelPriceRowFor(prices, modelID))
     .slice(0, IMPLICIT_FREE_PRICE_LIMIT)
     .map((modelID) => createImplicitFreePriceRow(channelID, modelID));
 }
@@ -205,12 +204,7 @@ function implicitFreePriceRowsForCurrentModelPage(channelID, prices) {
   if (currentPriceFilter() !== "free") return [];
   const modelID = currentMarketplaceModelID();
   if (!modelID || !hasModelPageImplicitFree(channelID, modelID)) return [];
-  const existing = existingModelPriceIDSet(prices);
-  return existing.has(normalizeModelID(modelID)) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
-}
-
-function existingModelPriceIDSet(prices) {
-  return new Set((prices || []).map((price) => normalizeModelID(price?.modelID)).filter(Boolean));
+  return hasModelPriceRowFor(prices, modelID) ? [] : [createImplicitFreePriceRow(channelID, modelID)];
 }
 
 function createImplicitFreePriceRow(channelID, modelID) {

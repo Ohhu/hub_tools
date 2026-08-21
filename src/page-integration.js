@@ -206,11 +206,13 @@ function insertPriceFilter() {
   if (!location.pathname.startsWith("/marketplace")) {
     resetPriceFilterState();
     removePriceFilterField();
+    removeModelIDFilterField();
     return;
   }
   const anchors = findMarketplaceFilterFields();
   if (!isMarketplaceChannelsTabActive() && !anchors.tags) {
     removePriceFilterField();
+    removeModelIDFilterField();
     return;
   }
   const filterAnchor = anchors.health || anchors.sort || anchors.tags;
@@ -220,6 +222,7 @@ function insertPriceFilter() {
   const previousParent = field.parentElement;
   const filterGrid = movePriceFilterToEndOfGrid(filterAnchor, field);
   if (!filterGrid) return;
+  ensureModelIDFilterField(filterGrid);
   if (previousParent && previousParent !== filterGrid) {
     previousParent.classList?.remove?.("hkb-marketplace-filter-grid");
   }
@@ -304,6 +307,132 @@ function hasFilterControl(field) {
 
 function currentOfficialFilter() {
   return selectedOfficialFilter;
+}
+
+function createModelIDFilterField() {
+  const field = document.createElement("div");
+  field.id = MODEL_ID_FIELD_ID;
+  field.className = "space-y-1";
+  field.dataset.hubToolModelIDFilter = "true";
+  field.innerHTML = `<p class="text-muted-foreground text-xs font-medium uppercase tracking-wide">模型 ID</p>
+    <div class="hkb-model-id-wrap">
+      <button type="button" id="${MODEL_ID_SELECT_ID}" class="hkb-model-id-trigger" aria-haspopup="listbox" aria-expanded="false" aria-label="按模型 ID 筛选渠道">
+        <span class="hkb-model-id-value">全部（不过滤）</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+      <div class="hkb-model-id-menu" role="listbox" aria-label="模型 ID 选项" hidden></div>
+    </div>`;
+  field.querySelector("button").addEventListener("click", handleModelIDTriggerClick);
+  field.querySelector("[role=\"listbox\"]").addEventListener("click", handleModelIDOptionClick);
+  ensureModelIDMenuGlobalHandler();
+  return field;
+}
+
+function syncModelIDFilterField(field) {
+  if (!field) return;
+  const trigger = field.querySelector(`#${MODEL_ID_SELECT_ID}`);
+  const menu = field.querySelector('[role="listbox"]');
+  if (!trigger || !menu) return;
+  const options = marketplaceModelIDOptions;
+  const nextValue = isModelIDFilterAll() ? MODEL_ID_ALL_VALUE : currentSelectedModelID();
+  const nextSignature = `${options.__signature || ""}|${nextValue}`;
+  const wrap = trigger.parentElement;
+  if (wrap.dataset.hubToolSignature === nextSignature) return;
+  wrap.dataset.hubToolSignature = nextSignature;
+  const optionLabel = (option) => `${option.value}（${option.serves}）`;
+  const selected = options.find((option) => option.value === nextValue);
+  const label = nextValue === MODEL_ID_ALL_VALUE ? "全部（不过滤）" : selected ? optionLabel(selected) : nextValue;
+  trigger.querySelector(".hkb-model-id-value").textContent = label;
+  trigger.title = label;
+  menu.textContent = "";
+  const entries = [{ value: MODEL_ID_ALL_VALUE, label: "全部（不过滤）" },
+    ...options.map((option) => ({ value: option.value, label: optionLabel(option) }))];
+  for (const entry of entries) {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.className = "hkb-model-id-option";
+    element.setAttribute("role", "option");
+    element.dataset.value = entry.value;
+    element.setAttribute("aria-selected", String(entry.value === nextValue));
+    element.innerHTML = `<span></span>`;
+    element.querySelector("span").textContent = entry.label;
+    menu.append(element);
+  }
+}
+
+function handleModelIDTriggerClick(event) {
+  const trigger = event.currentTarget;
+  const menu = trigger.parentElement.querySelector('[role="listbox"]');
+  if (!menu) return;
+  const open = menu.hidden;
+  closeAllModelIDMenus();
+  setModelIDMenuOpen(menu, open);
+}
+
+function handleModelIDOptionClick(event) {
+  const option = event.target?.closest?.("[data-value]");
+  if (!option) return;
+  const menu = event.currentTarget;
+  setModelIDMenuOpen(menu, false);
+  const value = option.dataset.value || "";
+  setModelIDFilter(value === currentMarketplaceModelID() ? "" : value);
+}
+
+function setModelIDMenuOpen(menu, open) {
+  menu.hidden = !open;
+  menu.parentElement?.querySelector(`#${MODEL_ID_SELECT_ID}`)?.setAttribute("aria-expanded", String(open));
+}
+
+function closeAllModelIDMenus() {
+  document.querySelectorAll(`#${MODEL_ID_FIELD_ID} [role="listbox"]`).forEach((menu) => {
+    if (!menu.hidden) setModelIDMenuOpen(menu, false);
+  });
+}
+
+function ensureModelIDMenuGlobalHandler() {
+  if (ensureModelIDMenuGlobalHandler.bound) return;
+  ensureModelIDMenuGlobalHandler.bound = true;
+  document.addEventListener("click", (event) => {
+    document.querySelectorAll(`#${MODEL_ID_FIELD_ID} .hkb-model-id-wrap`).forEach((wrap) => {
+      const menu = wrap.querySelector('[role="listbox"]');
+      if (menu && !menu.hidden && !wrap.contains(event.target)) setModelIDMenuOpen(menu, false);
+    });
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeAllModelIDMenus();
+  }, true);
+}
+
+function setModelIDFilter(value) {
+  const next = value === MODEL_ID_ALL_VALUE ? MODEL_ID_ALL_VALUE : String(value || "");
+  if (next === selectedMarketplaceModelID) return;
+  selectedMarketplaceModelID = next;
+  syncModelIDFilterField(document.getElementById(MODEL_ID_FIELD_ID));
+  applyVisiblePriceFilter();
+}
+
+function syncModelIDFilterPageContext() {
+  const isModelPage = location.pathname.startsWith("/marketplace/models/");
+  const current = isModelPage ? location.pathname : "";
+  if (current === modelIDFilterPathname) return;
+  modelIDFilterPathname = current;
+  selectedMarketplaceModelID = "";
+  syncModelIDFilterField(document.getElementById(MODEL_ID_FIELD_ID));
+}
+
+function ensureModelIDFilterField(filterGrid) {
+  if (!location.pathname.startsWith("/marketplace/models/")) {
+    removeModelIDFilterField();
+    return;
+  }
+  let field = document.getElementById(MODEL_ID_FIELD_ID);
+  if (!field) field = createModelIDFilterField();
+  if (field.parentElement !== filterGrid) filterGrid.append(field);
+  syncModelIDFilterField(field);
+}
+
+function removeModelIDFilterField() {
+  document.getElementById(MODEL_ID_FIELD_ID)?.remove?.();
 }
 
 function createPriceFilterField() {
@@ -444,6 +573,7 @@ function applyVisiblePriceFilter() {
   if (!location.pathname.startsWith("/marketplace/models/")) return;
   const mode = currentPriceFilter();
   const official = currentOfficialFilter();
+  const idFilterEnabled = !isModelIDFilterAll();
   for (const button of findChannelActionButtons()) {
     const context = findChannelContext(button);
     const channel = findActionButtonChannel(button);
@@ -451,7 +581,8 @@ function applyVisiblePriceFilter() {
     const officialState = modelProviderOfficialState(channel);
     const priceHidden = mode !== "all" && state !== null && !priceStateMatches(state, mode);
     const officialHidden = official && officialState === false;
-    const hidden = priceHidden || officialHidden;
+    const idHidden = idFilterEnabled && !providerServesSelectedModelID(channel);
+    const hidden = priceHidden || officialHidden || idHidden;
     if (context) context.dataset.hubToolPriceHidden = hidden ? "true" : "false";
   }
 }
@@ -595,6 +726,7 @@ function createRequestEditTrigger(anchor) {
 }
 
 function ensurePanel() {
+  syncModelIDFilterPageContext();
   injectStyle();
   replaceApiKeyActionButtons();
   removeMarketplaceVerificationButtons();

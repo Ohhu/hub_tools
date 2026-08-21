@@ -12,6 +12,59 @@ function currentMarketplaceModelID() {
   }
 }
 
+function currentSelectedModelID() {
+  return selectedMarketplaceModelID && selectedMarketplaceModelID !== MODEL_ID_ALL_VALUE
+    ? selectedMarketplaceModelID
+    : currentMarketplaceModelID();
+}
+
+function isModelIDFilterAll() {
+  return selectedMarketplaceModelID === MODEL_ID_ALL_VALUE;
+}
+
+function providerServesModelID(channel, modelID) {
+  const supportedModels = Array.isArray(channel?.supportedModels) ? channel.supportedModels : null;
+  const prices = Array.isArray(channel?.channelModelPrices) ? channel.channelModelPrices : null;
+  const target = normalizeModelID(modelID);
+  if (supportedModels?.some((id) => normalizeModelID(id) === target)) return true;
+  if (prices?.some((row) => normalizeModelID(row?.modelID) === target)) return true;
+  if (supportedModels && supportedModels.length > 0) return false;
+  return true;
+}
+
+function buildMarketplaceModelIDOptions(providers, pageModelID) {
+  const normalizedPageModelID = normalizeModelID(pageModelID);
+  if (!normalizedPageModelID || !Array.isArray(providers)) return [];
+  const mentions = new Map();
+  for (const provider of providers) {
+    const channel = provider?.channel || {};
+    const seen = new Set();
+    for (const id of channel.supportedModels || []) seen.add(id);
+    for (const row of channel.channelModelPrices || []) seen.add(row?.modelID);
+    for (const id of seen) {
+      const kind = modelIDVariantKind(id, normalizedPageModelID);
+      if (!kind) continue;
+      const key = normalizeModelID(id);
+      const entry = mentions.get(key) || { value: String(id), kind, count: 0 };
+      entry.count += 1;
+      mentions.set(key, entry);
+    }
+  }
+  const kindOrder = { exact: 0, prefixed: 1, dated: 2 };
+  const options = [...mentions.entries()].map(([key, entry]) => ({
+    key,
+    value: kindOrder[entry.kind] === 0 ? pageModelID : entry.value,
+    kind: entry.kind,
+    serves: providers.filter((provider) => providerServesModelID(provider?.channel, key)).length,
+  }));
+  options.sort((a, b) =>
+    (b.serves - a.serves)
+    || (kindOrder[a.kind] - kindOrder[b.kind])
+    || a.key.localeCompare(b.key),
+  );
+  return options;
+}
+
 function marketplaceModelIDFromPayload(payload) {
   return payload?.data?.marketplaceModel?.modelID || currentMarketplaceModelID();
 }
@@ -157,7 +210,40 @@ function modelFreeInPriceRows(modelID, prices) {
 
 function findModelPriceRow(prices, modelID) {
   const normalizedModelID = normalizeModelID(modelID);
-  return (prices || []).find((price) => normalizeModelID(price?.modelID) === normalizedModelID) || null;
+  if (!normalizedModelID) return null;
+  const rows = Array.isArray(prices) ? prices : [];
+  for (const kind of MODEL_PRICE_ROW_MATCH_KINDS) {
+    const row = rows.find((price) => modelPriceRowMatchKind(price, normalizedModelID) === kind);
+    if (row) return row;
+  }
+  return null;
+}
+
+function hasModelPriceRowFor(prices, modelID) {
+  return Boolean(findModelPriceRow(prices, modelID));
+}
+
+function modelPriceRowMatchKind(price, normalizedModelID) {
+  return modelIDVariantKind(price?.modelID, normalizedModelID);
+}
+
+function modelIDVariantKind(candidateID, normalizedModelID) {
+  const candidate = normalizeModelID(candidateID);
+  if (!candidate || !normalizedModelID) return "";
+  if (candidate === normalizedModelID) return "exact";
+  if (candidate.endsWith(`/${normalizedModelID}`)) return "prefixed";
+  if (modelDatedVariantRE(normalizedModelID).test(candidate)) return "dated";
+  return "";
+}
+
+function modelDatedVariantRE(normalizedModelID) {
+  let pattern = modelDatedVariantRECache.get(normalizedModelID);
+  if (!pattern) {
+    const escaped = normalizedModelID.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    pattern = new RegExp(`^${escaped}-\\d{3,4}$`);
+    modelDatedVariantRECache.set(normalizedModelID, pattern);
+  }
+  return pattern;
 }
 
 function rememberImplicitFreeModelPageContext(channel, modelID, detail) {
