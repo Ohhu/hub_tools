@@ -6,6 +6,7 @@ const queries = {
   getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
   getChannelModelPrices: "query ChannelModelPrices($id:ID!){node(id:$id){... on Channel{id channelModelPrices{id modelID price{items{itemCode multiplier pricing{mode flatFee usagePerUnit usageTiered{tiers{upTo pricePerUnit}}} promptWriteCacheVariants{variantCode pricing{mode flatFee usagePerUnit}}}}}}}}",
   updateProfiles: "mutation UpdateAPIKeyProfiles($id:ID!,$input:UpdateAPIKeyProfilesInput!){updateAPIKeyProfiles(id:$id,input:$input){id name status profiles{activeProfile profiles{name channelIDs channelBindingMode}}}}",
+  updateKey: "mutation UpdateAPIKey($id:ID!,$input:UpdateAPIKeyInput!){updateAPIKey(id:$id,input:$input){id name status}}",
   updateKeyStatus: "mutation UpdateAPIKeyStatus($id:ID!,$status:APIKeyStatus!){updateAPIKeyStatus(id:$id,status:$status){id status}}",
   me: "query Me{me{id projects{projectID}}}",
 };

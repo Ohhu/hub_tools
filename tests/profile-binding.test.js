@@ -120,6 +120,73 @@ async function main() {
     assert.deepEqual(names, ["★ special", "🚀 fast lane", "7", "备用", "主力 Key", "Alpha", "deepseek"]);
   }
 
+  // ===== Key 改名（0.4.12）：saveEditBindings 流程中的 renameKeyIfChanged =====
+  {
+    callLog.length = 0;
+    helpers.__setGraphqlForTest(async (query, variables, op) => {
+      callLog.push([op, variables]);
+      if (op === "GetApiKey") return { node: { id: variables.id, name: "旧名字", status: "enabled", profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1] }] } } };
+      if (op === "UpdateAPIKey") return { updateAPIKey: { id: variables.id, name: variables.input.name, status: "enabled" } };
+      if (op === "UpdateAPIKeyStatus") return { updateAPIKeyStatus: { id: variables.id, status: variables.status } };
+      if (op === "UpdateAPIKeyProfiles") return { updateAPIKeyProfiles: { id: variables.id } };
+      return {};
+    });
+
+    // 名称未变：不提交 UpdateAPIKey
+    assert.equal(await helpers.renameKeyIfChanged("gid://axonhub/APIKey/1", "旧名字", "旧名字"), false);
+    assert.deepEqual(callLog.map(([op]) => op), []);
+
+    // 名称改变：提交 UpdateAPIKey 且只带 name
+    callLog.length = 0;
+    assert.equal(await helpers.renameKeyIfChanged("gid://axonhub/APIKey/1", "旧名字", "新名字"), true);
+    assert.deepEqual(callLog.map(([op]) => op), ["UpdateAPIKey"]);
+    assert.equal(callLog[0][1].input.name, "新名字");
+
+    // 空名称拒绝
+    await assert.rejects(helpers.renameKeyIfChanged("gid://axonhub/APIKey/1", "旧名字", "  "), /名称不能为空/);
+  }
+
+  // ===== 更新密钥（0.4.12）：rotateKey 轮换流程 =====
+  {
+    callLog.length = 0;
+    helpers.__setGraphqlForTest(async (query, variables, op) => {
+      callLog.push([op, variables]);
+      if (op === "GetApiKey") return { node: { id: variables.id, name: "主力", status: "enabled", profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1, 2] }] } } };
+      if (op === "UpdateAPIKey") return { updateAPIKey: { id: variables.id, name: variables.input.name, status: "enabled" } };
+      if (op === "UpdateAPIKeyStatus") return { updateAPIKeyStatus: { id: variables.id, status: variables.status } };
+      if (op === "CreateAPIKey") return { createAPIKey: { id: "gid://axonhub/APIKey/999", key: "ah-newkey", name: variables.input.name, status: "enabled", type: "user" } };
+      if (op === "UpdateAPIKeyProfiles") return { updateAPIKeyProfiles: { id: variables.id } };
+      if (op === "Me") return { me: { id: "gid://axonhub/User/1", projects: [] } };
+      if (op === "GetApiKeys") return { apiKeys: { edges: [{ node: { id: "gid://axonhub/APIKey/999", name: "主力", status: "enabled" } }], pageInfo: { hasNextPage: false } } };
+      return {};
+    });
+
+    assert.equal(helpers.keyArchiveName("gid://axonhub/APIKey/71966"), "#71966");
+    assert.equal(helpers.keyArchiveName("71966"), "#71966");
+    assert.equal(helpers.keyArchiveName(""), "");
+
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/71966", name: "主力", status: "enabled" }]);
+    const created = await helpers.rotateKey("gid://axonhub/APIKey/71966", { name: "主力" });
+    // 顺序：读配置 -> 旧 Key 改名 #id -> 归档 -> 新建 -> 迁移绑定 -> 刷新列表（Me 仅首次）
+    assert.deepEqual(callLog.map(([op]) => op), ["GetApiKey", "UpdateAPIKey", "UpdateAPIKeyStatus", "CreateAPIKey", "UpdateAPIKeyProfiles", "Me", "GetApiKeys"]);
+    assert.equal(callLog[1][1].input.name, "#71966");
+    assert.equal(callLog[2][1].status, "archived");
+    assert.equal(callLog[3][1].input.name, "主力");
+    assert.equal(JSON.stringify(callLog[4][1].input.profiles[0].channelIDs), "[1,2]");
+    assert.equal(created.id, "gid://axonhub/APIKey/999");
+
+    // 新旧名称相同时仍可轮换（旧 Key 改名 #id，新 Key 沿用原名）
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/71966", name: "主力", status: "enabled" }]);
+    callLog.length = 0;
+    const again = await helpers.rotateKey("gid://axonhub/APIKey/71966", { name: "主力" });
+    assert.equal(again.id, "gid://axonhub/APIKey/999");
+
+    // archived 拒绝
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/71966", name: "主力", status: "archived" }]);
+    await assert.rejects(helpers.rotateKey("gid://axonhub/APIKey/71966", { name: "新名字" }), /已归档/);
+    helpers.__setKeysCacheForTest([]);
+  }
+
   helpers.__setGraphqlForTest(null);
 
   await Promise.resolve();

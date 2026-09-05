@@ -57,6 +57,7 @@ let editChannelIDs = [];
 let editLoadToken = 0;
 let editDirty = false;
 let editDragState = null;
+let editKeyNameBaseline = "";
 let lastPathname = location.pathname;
 
 function requestUrl(input) {
