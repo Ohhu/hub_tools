@@ -129,10 +129,23 @@ function renderKeyOptions() {
   if (!keysCache.some((key) => key.id === selectedKeyID)) selectedKeyID = keysCache[0]?.id || "";
   document.querySelectorAll(`#${DIALOG_ID} [data-role="key-menu"], #${DIALOG_ID} [data-role="edit-key-menu"]`).forEach((menu) => {
     menu.innerHTML = keysCache.length
-      ? keysCache.map((key) => `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}" role="option" aria-selected="${String(key.id === selectedKeyID)}"><span>${escapeHtml(keyLabel(key))}</span></button></li>`).join("")
+      ? keysCache.map((key) => `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}" role="option" aria-selected="${String(key.id === selectedKeyID)}"><span>${escapeHtml(keyLabel(key))}</span>${renderKeyStatusBadge(key)}</button></li>`).join("")
       : `<li><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="" role="option" disabled>暂无 API Key</button></li>`;
   });
   syncKeyPicker();
+}
+
+function keyStatusText(key) {
+  if (key?.status === "enabled") return "已启用";
+  if (key?.status === "disabled") return "已禁用";
+  if (key?.status === "archived") return "已归档";
+  return "";
+}
+
+function renderKeyStatusBadge(key) {
+  const statusText = keyStatusText(key);
+  if (!statusText || key.status === "enabled") return "";
+  return `<span class="hkb-key-status" data-status="${escapeHtml(key.status)}">${statusText}</span>`;
 }
 
 function keyLabel(key) {
@@ -148,7 +161,7 @@ function selectKey(keyID) {
 function syncKeyPicker() {
   const current = keysCache.find((key) => key.id === selectedKeyID);
   document.querySelectorAll(`#${DIALOG_ID} [data-role="key-label"], #${DIALOG_ID} [data-role="edit-key-label"]`).forEach((label) => {
-    label.textContent = current ? keyLabel(current) : "暂无 API Key";
+    label.textContent = current ? `${keyLabel(current)}${keyStatusText(current) ? `（${keyStatusText(current)}）` : ""}` : "暂无 API Key";
   });
   document.querySelectorAll(`#${DIALOG_ID} [data-role="key-trigger"], #${DIALOG_ID} [data-role="edit-key-trigger"]`).forEach((trigger) => {
     trigger.disabled = !keysCache.length;
@@ -349,7 +362,7 @@ function markScrolling(node) {
 async function updateExistingKeyBinding(mode) {
   const result = await bindChannelToKey(selectedKeyID, currentChannelID(), mode);
   if (mode === "append" && result.alreadyBound) setStatus("当前渠道已在选中 Key 的绑定列表中");
-  else setStatus(mode === "replace" ? "已替换选中 Key 的渠道绑定" : "已追加当前渠道到选中 Key");
+  else setStatus(mode === "replace" ? `已替换选中 Key 的渠道绑定${result.enabledKey ? "（Key 已自动启用）" : ""}` : `已追加当前渠道到选中 Key${result.enabledKey ? "（Key 已自动启用）" : ""}`);
 }
 
 async function createKeyAndBind() {
@@ -370,10 +383,27 @@ async function bindChannelToKey(keyID, channelID, mode = "replace") {
   const numericChannelID = extractNumericChannelID(channelID);
   if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
   if (!numericChannelID) throw new Error(`渠道 ID 无效：${channelID}`);
+  const enabledKey = await ensureKeyEnabledForBinding(keyID, data.node.status);
   setStatus("正在写入渠道绑定");
   const input = buildProfilesInput(data.node.profiles, numericChannelID, mode);
   await graphql(queries.updateProfiles, { id: keyID, input }, "UpdateAPIKeyProfiles");
-  return { alreadyBound: mode === "append" && getActiveProfile(data.node.profiles).channelIDs?.includes(numericChannelID) };
+  return { alreadyBound: mode === "append" && getActiveProfile(data.node.profiles).channelIDs?.includes(numericChannelID), enabledKey };
+}
+
+async function ensureKeyEnabledForBinding(keyID, status) {
+  if (status !== "disabled") return false;
+  setStatus("Key 处于禁用状态，正在启用");
+  await graphql(queries.updateKeyStatus, { id: keyID, status: "enabled" }, "UpdateAPIKeyStatus");
+  updateCachedKeyStatus(keyID, "enabled");
+  return true;
+}
+
+function updateCachedKeyStatus(keyID, status) {
+  const key = keysCache.find((entry) => entry.id === keyID);
+  if (!key) return;
+  key.status = status;
+  syncKeyPicker();
+  renderKeyOptions();
 }
 
 function setCurrentChannel(channel, options = {}) {
@@ -442,10 +472,11 @@ async function saveEditBindings() {
   setEditStatus("保存中");
   const data = await graphql(queries.getKey, { id: selectedKeyID }, "GetApiKey");
   if (!data.node?.profiles) throw new Error("未读取到 Key profiles");
+  const enabledKey = await ensureKeyEnabledForBinding(selectedKeyID, data.node.status);
   const input = buildProfilesInputWithChannelIDs(data.node.profiles, editChannelIDs);
   await graphql(queries.updateProfiles, { id: selectedKeyID, input }, "UpdateAPIKeyProfiles");
   setEditDirty(false);
-  setEditStatus("已保存");
+  setEditStatus(enabledKey ? "已保存（Key 已自动启用）" : "已保存");
 }
 
 function apiKeyValue(key) {
@@ -486,9 +517,14 @@ function syncActionButtons() {
 async function copySelectedKey() {
   const keyID = selectedKeyID;
   if (!keyID) throw new Error("请先选择 API Key");
+  const cached = keysCache.find((key) => key.id === keyID);
   const data = await graphql(queries.getKeyValue, { id: keyID }, "GetApiKeyValue");
-  const value = data?.node?.key;
-  if (!value) throw new Error("该 Key 无可复制的密钥值");
+  const value = data?.node?.key || cached?.key || "";
+  if (!value) {
+    const statusText = keyStatusText(cached || data?.node);
+    throw new Error(statusText === "已禁用" ? "读取密钥值失败（Key 处于禁用状态）" : "读取密钥值失败，请刷新后重试");
+  }
+  if (cached && !cached.key) cached.key = value;
   await navigator.clipboard.writeText(value);
   setStatus("已复制密钥");
 }
@@ -592,7 +628,7 @@ function escapeHtml(value) {
       #${DIALOG_ID} .hkb-copy-new{border-color:var(--border,#d1d5db);background:var(--card,#fff);color:var(--foreground,#374151);white-space:nowrap}#${DIALOG_ID} .hkb-copy-new:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#374151))}
       #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:8px}#${DIALOG_ID} .hkb-key-picker{position:relative;flex:1;min-width:0}#${DIALOG_ID} .hkb-key-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer}#${DIALOG_ID} .hkb-key-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-trigger::after{content:"";width:8px;height:8px;border-right:1.5px solid var(--muted-foreground,#6b7280);border-bottom:1.5px solid var(--muted-foreground,#6b7280);transform:rotate(45deg) translateY(-2px);flex-shrink:0;transition:transform .15s}#${DIALOG_ID} .hkb-key-trigger[aria-expanded="true"]::after{transform:rotate(225deg) translateY(-1px)}
       #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:var(--popover,var(--card,#fff));border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 18px 48px -24px rgb(15 23 42 / .55),0 8px 20px -18px rgb(15 23 42 / .45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
-      #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:var(--popover-foreground,var(--foreground,#111827));text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      #${DIALOG_ID} .hkb-key-option{width:100%;min-height:38px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:var(--popover-foreground,var(--foreground,#111827));text-align:left;padding:8px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover,#${DIALOG_ID} .hkb-key-option[aria-selected="true"]{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-option[aria-selected="true"]::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700}#${DIALOG_ID} .hkb-key-option:not([aria-selected="true"])::before{content:"";width:12px}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-status{margin-left:auto;flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:650;line-height:16px;white-space:nowrap}#${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border:1px solid color-mix(in oklab,var(--destructive,#dc2626) 35%,transparent);background:color-mix(in oklab,var(--destructive,#dc2626) 10%,transparent);color:var(--destructive,#dc2626)}#${DIALOG_ID} .hkb-key-status[data-status="archived"]{border:1px solid var(--border,#e5e7eb);background:var(--secondary,#f3f4f6);color:var(--muted-foreground,#6b7280)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border-color:color-mix(in oklab,var(--destructive,#fc6b83) 45%,transparent);background:color-mix(in oklab,var(--destructive,#fc6b83) 14%,transparent);color:var(--destructive,#fc6b83)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="archived"]{border-color:var(--border,rgb(255 255 255/.09));background:color-mix(in oklab,white 8%,transparent);color:var(--muted-foreground,#9ca3af)}
       #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
       #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}

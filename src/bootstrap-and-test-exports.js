@@ -95,7 +95,11 @@
       multiplierTone,
       constrainRequestLogChannelCell,
       channelLabel,
-
+      keyStatusText,
+      bindChannelToKey,
+      renderKeyStatusBadge,
+      ensureKeyEnabledForBinding,
+      updateCachedKeyStatus,
       loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
       __setModelIDFilterForTest: (value) => { selectedMarketplaceModelID = String(value || ""); },
