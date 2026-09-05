@@ -6,6 +6,7 @@ const MARKETPLACE_HEALTH_LABEL_RE = /^(健康序列|health(?:\s+window|\s+sequen
 const MARKETPLACE_VERIFICATION_ACTION_RE = /^(真伪核验|Authenticity\s+Check|Verify\s+Authenticity)$/i;
 const MARKETPLACE_SEARCH_PLACEHOLDER_RE = /渠道名称|支持模型|search/i;
 const REQUESTS_API_KEY_LABEL = "API密钥";
+const REQUEST_LOG_CHANNEL_HEADER_RE = /^(渠道|channel)$/i;
 const MARKETPLACE_FREE_SORT_TEXT = "倍率从低到高";
 const MARKETPLACE_DEFAULT_SORT_TEXT = "综合推荐";
 
@@ -606,43 +607,30 @@ function insertRequestTriggers() {
 }
 
 function injectRequestLogMultiplierColumn() {
-  if (!isRequestsConsumerRoute()) return;
+  if (!isRequestsConsumerRoute()) {
+    removeRequestLogMultiplierColumn();
+    return;
+  }
   const table = document.querySelector("main table");
   if (!table) return;
   const channelColumnIndex = requestLogChannelColumnIndex(table);
-  if (channelColumnIndex < 0) return;
+  if (channelColumnIndex < 0) {
+    removeRequestLogMultiplierColumn();
+    return;
+  }
   ensureRequestLogMultiplierHeader(table, channelColumnIndex);
   const rows = Array.from(table.querySelectorAll("tbody tr"));
   for (const row of rows) {
-    const cells = row.children;
-    if (!cells.length) continue;
-    const channelCell = cells[channelColumnIndex];
-    if (!channelCell) continue;
-    constrainRequestLogChannelCell(channelCell);
-    const targetIndex = channelColumnIndex + 1;
-    const existingCell = targetIndex < cells.length ? cells[targetIndex] : null;
-    if (existingCell?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) continue;
-    const requestID = requestLogIDFromRow(row);
-    const multiplier = requestID == null ? null : requestLogMultiplierCache.get(requestID);
-    const formattedMultiplier = multiplier == null ? "" : formatMultiplier(multiplier);
-    const cell = document.createElement("td");
-    cell.className = `${channelCell.className || "p-2 align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS}`;
-    if (multiplier == null) {
-      cell.textContent = "-";
-      cell.setAttribute("aria-label", "渠道倍率未知");
-    } else {
-      cell.textContent = `×${formattedMultiplier}`;
-      cell.title = `渠道倍率：${formattedMultiplier}`;
-      cell.setAttribute("aria-label", `渠道倍率 ${formattedMultiplier}`);
-      if (multiplierTone(formattedMultiplier) === "low") cell.classList.add(MULTIPLIER_LOW_TONE_CLASS);
-      if (multiplierTone(formattedMultiplier) === "high") cell.classList.add(MULTIPLIER_HIGH_TONE_CLASS);
-    }
-    if (existingCell) {
-      row.insertBefore(cell, existingCell);
-    } else {
-      row.appendChild(cell);
-    }
+    injectRequestLogMultiplierRow(row, channelColumnIndex);
   }
+}
+
+function removeRequestLogMultiplierColumn() {
+  document.querySelectorAll?.(`.${MULTIPLIER_COLUMN_CLASS}`).forEach((cell) => cell.remove?.());
+  document.querySelectorAll?.(`.${REQUEST_LOG_CHANNEL_COLUMN_CLASS}`).forEach((cell) => {
+    cell.classList?.remove?.(REQUEST_LOG_CHANNEL_COLUMN_CLASS);
+    if (cell.tagName === "TD") cell.removeAttribute?.("title");
+  });
 }
 
 function ensureRequestLogMultiplierHeader(table, channelColumnIndex) {
@@ -650,21 +638,62 @@ function ensureRequestLogMultiplierHeader(table, channelColumnIndex) {
   const channelHeader = headers[channelColumnIndex];
   if (!channelHeader) return;
   channelHeader.classList.add(REQUEST_LOG_CHANNEL_COLUMN_CLASS);
-  const targetIndex = channelColumnIndex + 1;
-  const existingHeader = targetIndex < headers.length ? headers[targetIndex] : null;
-  if (existingHeader?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS)) {
-    existingHeader.classList.add(MULTIPLIER_COLUMN_HEADER_CLASS);
+  const multiplierHeaders = headers.filter((header) => header?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS));
+  multiplierHeaders.slice(1).forEach((header) => header.remove?.());
+  let header = multiplierHeaders[0];
+  if (!header) {
+    header = document.createElement("th");
+    header.className = `${channelHeader.className || "h-10 px-2 text-left align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS} ${MULTIPLIER_COLUMN_HEADER_CLASS}`;
+    header.textContent = "倍率";
+    header.setAttribute("aria-label", "倍率");
+  } else {
+    header.classList.add(MULTIPLIER_COLUMN_HEADER_CLASS);
+  }
+  if (header.parentElement !== channelHeader.parentElement || header.previousElementSibling !== channelHeader) {
+    channelHeader.parentElement.insertBefore(header, channelHeader.nextElementSibling);
+  }
+}
+
+function injectRequestLogMultiplierRow(row, channelColumnIndex) {
+  const cells = Array.from(row.children);
+  if (!cells.length) return;
+  const channelCell = cells[channelColumnIndex];
+  if (!channelCell) return;
+  constrainRequestLogChannelCell(channelCell);
+  const multiplierCells = cells.filter((cell) => cell?.classList?.contains?.(MULTIPLIER_COLUMN_CLASS));
+  multiplierCells.slice(1).forEach((cell) => cell.remove?.());
+  let cell = multiplierCells[0];
+  if (!cell) {
+    cell = document.createElement("td");
+    cell.className = `${channelCell.className || "p-2 align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS}`;
+  }
+  if (cell.parentElement !== channelCell.parentElement || cell.previousElementSibling !== channelCell) {
+    channelCell.parentElement.insertBefore(cell, channelCell.nextElementSibling);
+  }
+  applyRequestLogMultiplierCellContent(cell, row);
+}
+
+function applyRequestLogMultiplierCellContent(cell, row) {
+  const requestID = requestLogIDFromRow(row);
+  const multiplier = requestID == null ? null : requestLogMultiplierCache.get(requestID);
+  cell.classList.remove(MULTIPLIER_LOW_TONE_CLASS, MULTIPLIER_HIGH_TONE_CLASS);
+  if (multiplier == null) {
+    if (cell.textContent !== "-") {
+      cell.textContent = "-";
+      cell.removeAttribute?.("title");
+      cell.setAttribute("aria-label", "渠道倍率未知");
+    }
     return;
   }
-  const header = document.createElement("th");
-  header.className = `${channelHeader.className || "h-10 px-2 text-left align-middle whitespace-nowrap"} ${MULTIPLIER_COLUMN_CLASS} ${MULTIPLIER_COLUMN_HEADER_CLASS}`;
-  header.textContent = "倍率";
-  header.setAttribute("aria-label", "倍率");
-  if (existingHeader) {
-    channelHeader.parentElement.insertBefore(header, existingHeader);
-  } else {
-    channelHeader.parentElement.appendChild(header);
-  }
+  const formattedMultiplier = formatMultiplier(multiplier);
+  if (multiplierTone(formattedMultiplier) === "low") cell.classList.add(MULTIPLIER_LOW_TONE_CLASS);
+  if (multiplierTone(formattedMultiplier) === "high") cell.classList.add(MULTIPLIER_HIGH_TONE_CLASS);
+  const text = `×${formattedMultiplier}`;
+  const title = `渠道倍率：${formattedMultiplier}`;
+  if (cell.textContent === text && cell.title === title) return;
+  cell.textContent = text;
+  cell.title = title;
+  cell.setAttribute("aria-label", `渠道倍率 ${formattedMultiplier}`);
 }
 
 function constrainRequestLogChannelCell(channelCell) {
@@ -685,7 +714,7 @@ function multiplierTone(multiplier) {
 
 function requestLogChannelColumnIndex(table) {
   const headers = Array.from(table.querySelectorAll("thead th"));
-  const index = headers.findIndex((th) => cleanText(th.textContent) === "渠道");
+  const index = headers.findIndex((th) => REQUEST_LOG_CHANNEL_HEADER_RE.test(cleanText(th.textContent)));
   return index < 0 ? -1 : index;
 }
 

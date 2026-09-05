@@ -49,7 +49,9 @@
       if (!Array.isArray(lines)) continue;
       const multiplier = lines.find((line) => line?.multiplier != null)?.multiplier;
       if (multiplier == null) continue;
-      requestLogMultiplierCache.set(requestLogNumericID(node.id), multiplier);
+      const numericID = requestLogNumericID(node.id);
+      if (numericID == null) continue;
+      requestLogMultiplierCache.set(numericID, multiplier);
     }
   }
 

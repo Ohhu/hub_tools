@@ -5,7 +5,7 @@ const { FakeElement } = require("./fake-dom");
 function loadHelpers(sourcePath = "LinuxDo Hub Tool.user.js") {
   const source = fs.readFileSync(sourcePath, "utf8");
   const documentElement = new FakeElement();
-  const documentState = { main: null, selectedTab: null };
+  const documentState = { main: null, selectedTab: null, documentElement };
   const context = {
     Headers,
     Request,
@@ -17,14 +17,14 @@ function loadHelpers(sourcePath = "LinuxDo Hub Tool.user.js") {
       readyState: "loading",
       documentElement,
       addEventListener() {},
-      createElement: () => new FakeElement(),
+      createElement: (tag) => new FakeElement({ props: { tagName: String(tag).toUpperCase() } }),
       getElementById: () => null,
       querySelector: (selector) => {
         if (selector === "main") return documentState.main;
         if (selector === '[role="tab"][aria-selected="true"], [role="tab"][data-state="active"]') return documentState.selectedTab;
-        return null;
+        return documentElement.querySelector(selector);
       },
-      querySelectorAll: () => [],
+      querySelectorAll: (selector) => documentElement.querySelectorAll(selector),
     },
     location: { pathname: "/marketplace", origin: "https://hub.linux.do" },
     navigator: { clipboard: { writeText() {} } },
