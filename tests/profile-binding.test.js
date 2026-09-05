@@ -57,6 +57,69 @@ async function main() {
   assert.equal(helpers.renderKeyStatusBadge({ status: "enabled" }), "");
   assert.equal(helpers.renderKeyStatusBadge({}), "");
 
+  // ===== Key 状态开关（0.4.10）=====
+  // 开关渲染：enabled/disabled 渲染 role="switch"，archived 仅保留状态徽章
+  {
+    const toggle = helpers.renderKeyStatusToggle({ id: "gid://axonhub/APIKey/1", name: "主力 Key", status: "enabled" });
+    assert.equal(toggle.includes('class="hkb-key-toggle"'), true);
+    assert.equal(toggle.includes('data-action="toggle-key-status"'), true);
+    assert.equal(toggle.includes('data-key-id="gid://axonhub/APIKey/1"'), true);
+    assert.equal(toggle.includes('data-status="enabled"'), true);
+    assert.equal(toggle.includes('role="switch"'), true);
+    assert.equal(toggle.includes('aria-checked="true"'), true);
+    assert.equal(toggle.includes('aria-label="主力 Key 启用状态"'), true);
+  }
+  {
+    const toggle = helpers.renderKeyStatusToggle({ id: "gid://axonhub/APIKey/2", name: "备用 <Key>", status: "disabled" });
+    assert.equal(toggle.includes('data-status="disabled"'), true);
+    assert.equal(toggle.includes('aria-checked="false"'), true);
+    assert.equal(toggle.includes("备用 &lt;Key&gt;"), true);
+  }
+  assert.equal(helpers.renderKeyStatusToggle({ status: "archived" }), '<span class="hkb-key-status" data-status="archived">已归档</span>');
+  assert.equal(helpers.renderKeyStatusToggle({}), "");
+  assert.equal(helpers.renderKeyStatusToggle(null), "");
+
+  // 开关切换：disabled -> enabled / enabled -> disabled
+  {
+    callLog.length = 0;
+    helpers.__setGraphqlForTest(makeFakeGql("disabled"));
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/1", name: "主力 Key", status: "disabled" }]);
+    const next = await helpers.toggleKeyStatus("gid://axonhub/APIKey/1");
+    assert.deepEqual(callLog.map(([op]) => op), ["UpdateAPIKeyStatus"]);
+    assert.equal(callLog[0][1].status, "enabled");
+    assert.equal(next, "enabled");
+  }
+  {
+    callLog.length = 0;
+    helpers.__setGraphqlForTest(makeFakeGql("enabled"));
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/1", name: "主力 Key", status: "enabled" }]);
+    const next = await helpers.toggleKeyStatus("gid://axonhub/APIKey/1");
+    assert.deepEqual(callLog.map(([op]) => op), ["UpdateAPIKeyStatus"]);
+    assert.equal(callLog[0][1].status, "disabled");
+    assert.equal(next, "disabled");
+  }
+  {
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/1", name: "主力 Key", status: "archived" }]);
+    await assert.rejects(helpers.toggleKeyStatus("gid://axonhub/APIKey/1"), /已归档/);
+    helpers.__setKeysCacheForTest([]);
+  }
+
+  // ===== Key 排序（0.4.11）：emoji 等符号在前，文字名称按 locale 首字母 =====
+  {
+    const keys = [
+      { id: "4", name: "deepseek" },
+      { id: "1", name: "主力 Key" },
+      { id: "2", name: "🚀 fast lane" },
+      { id: "3", name: "Alpha" },
+      { id: "5", name: "备用" },
+      { id: "6", name: "★ special" },
+      { id: "7", name: "" },
+    ];
+    const names = plain(helpers.sortKeys(keys)).map((key) => key.name || key.id);
+    // 符号组在前（按 locale 序）；文字组内：数字 → 中文（拼音序）→ 拉丁字母。
+    assert.deepEqual(names, ["★ special", "🚀 fast lane", "7", "备用", "主力 Key", "Alpha", "deepseek"]);
+  }
+
   helpers.__setGraphqlForTest(null);
 
   await Promise.resolve();

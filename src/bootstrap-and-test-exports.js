@@ -97,13 +97,17 @@
       channelLabel,
       keyStatusText,
       bindChannelToKey,
+      sortKeys,
       renderKeyStatusBadge,
+      renderKeyStatusToggle,
+      toggleKeyStatus,
       ensureKeyEnabledForBinding,
       updateCachedKeyStatus,
       loadMissingChannelNames,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
       __setModelIDFilterForTest: (value) => { selectedMarketplaceModelID = String(value || ""); },
       __setOfficialFilterForTest: (value) => { selectedOfficialFilter = Boolean(value); },
+      __setKeysCacheForTest: (value) => { keysCache = Array.isArray(value) ? value : []; },
       __setGraphqlForTest: setGraphqlRunnerForTest,
     };
   }
