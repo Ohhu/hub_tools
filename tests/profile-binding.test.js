@@ -189,6 +189,21 @@ async function main() {
     // 必填字段缺失时降级：quota 缺 period、策略缺 mode、空 routingPolicy 均不提交而非报错
     const degraded = plain(helpers.buildProfilesInputCopy({ activeProfile: "default", profiles: [{ name: "default", quota: { requests: 5 }, dynamicChannelStrategy: { maxChannels: 2 }, routingPolicy: {} }] }));
     assert.deepEqual(degraded.profiles[0], { name: "default" });
+
+    // #68350 真实形态：default + Auto 双配置，activeProfile=Auto（非 default 也要原样带回）
+    const dual = plain(helpers.buildProfilesInputCopy({
+      activeProfile: "Auto",
+      profiles: [
+        { name: "default", channelTagsMatchMode: "any", channelBindingMode: "manual" },
+        { name: "Auto", modelIDs: ["deepseek-v4-flash"], channelBindingMode: "dynamic", routingPolicy: { providerWeights: [{ provider: "deepseek", weight: 10 }] }, dynamicChannelStrategy: { mode: "balanced", selectionPolicy: "ranked", maxChannels: 15, minChannels: 3, maxPriceMultiplier: 0.2, maxLatencyMs: 5000, minSuccessRate: 0.95, minCacheRate: 0, minDetectionScore: 0, onlyOfficial: false } },
+      ],
+    }));
+    assert.equal(dual.activeProfile, "Auto");
+    assert.equal(dual.profiles.length, 2); // 两个配置全部复制
+    assert.equal(dual.profiles[0].name, "default");
+    assert.equal(dual.profiles[1].name, "Auto");
+    assert.equal(dual.profiles[1].routingPolicy.providerWeights[0].weight, 10);
+    assert.equal(dual.profiles[1].dynamicChannelStrategy.maxChannels, 15);
   }
 
   // ===== 更新密钥（0.4.12）：rotateKey 轮换流程 =====
