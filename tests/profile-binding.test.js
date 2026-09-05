@@ -17,14 +17,14 @@ async function main() {
 
   // ===== key 状态与自动启用（0.4.8）=====
   const callLog = [];
-  const fakeGql = async (query, variables, op) => {
+  const makeFakeGql = (status) => async (query, variables, op) => {
     callLog.push([op, variables]);
-    if (op === "GetApiKey") return { node: { id: variables.id, status: "disabled", profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1] }] } } };
+    if (op === "GetApiKey") return { node: { id: variables.id, status, profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1] }] } } };
     if (op === "UpdateAPIKeyStatus") return { updateAPIKeyStatus: { id: variables.id, status: variables.status } };
     if (op === "UpdateAPIKeyProfiles") return { updateAPIKeyProfiles: { id: variables.id } };
     return {};
   };
-  helpers.__setGraphqlForTest(fakeGql);
+  helpers.__setGraphqlForTest(makeFakeGql("disabled"));
 
   // 禁用 key 绑定渠道：先启用再写绑定
   {
@@ -39,13 +39,7 @@ async function main() {
   // 启用 key 绑定渠道：不触发状态修正
   {
     callLog.length = 0;
-    const enabledGql = async (query, variables, op) => {
-      callLog.push([op, variables]);
-      if (op === "GetApiKey") return { node: { id: variables.id, status: "enabled", profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1] }] } } };
-      if (op === "UpdateAPIKeyProfiles") return { updateAPIKeyProfiles: { id: variables.id } };
-      return {};
-    };
-    helpers.__setGraphqlForTest(enabledGql);
+    helpers.__setGraphqlForTest(makeFakeGql("enabled"));
     const result = await helpers.bindChannelToKey("gid://axonhub/APIKey/1", "gid://axonhub/Channel/42", "replace");
     assert.deepEqual(callLog.map(([op]) => op), ["GetApiKey", "UpdateAPIKeyProfiles"]);
     assert.equal(result.enabledKey, false);
@@ -69,10 +63,8 @@ async function main() {
   console.log("profile binding helpers ok");
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
-}
+});
 

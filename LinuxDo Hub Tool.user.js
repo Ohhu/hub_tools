@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.4.8
+// @version      0.4.9
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -128,7 +128,7 @@ function isJsonResponse(response) {
 
 const queries = {
   createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
-  getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name key status user{id}}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
+  getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name status}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
   getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status user{id} profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
   getKeyValue: "query GetApiKeyValue($id:ID!){node(id:$id){... on APIKey{id key status user{id}}}}",
   getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
@@ -2034,17 +2034,18 @@ function renderKeyOptions() {
   syncKeyPicker();
 }
 
+const KEY_STATUS_LABELS = { enabled: "已启用", disabled: "已禁用", archived: "已归档" };
+
 function keyStatusText(key) {
-  if (key?.status === "enabled") return "已启用";
-  if (key?.status === "disabled") return "已禁用";
-  if (key?.status === "archived") return "已归档";
-  return "";
+  return KEY_STATUS_LABELS[key?.status] || "";
 }
 
+// archived 为防御性保留：loadKeys 的 statusIn 过滤当前不含 archived。
 function renderKeyStatusBadge(key) {
-  const statusText = keyStatusText(key);
-  if (!statusText || key.status === "enabled") return "";
-  return `<span class="hkb-key-status" data-status="${escapeHtml(key.status)}">${statusText}</span>`;
+  const status = key?.status;
+  const text = KEY_STATUS_LABELS[status];
+  if (!text || status === "enabled") return "";
+  return `<span class="hkb-key-status" data-status="${escapeHtml(status)}">${text}</span>`;
 }
 
 function keyLabel(key) {
@@ -2059,8 +2060,9 @@ function selectKey(keyID) {
 
 function syncKeyPicker() {
   const current = keysCache.find((key) => key.id === selectedKeyID);
+  const statusText = keyStatusText(current);
   document.querySelectorAll(`#${DIALOG_ID} [data-role="key-label"], #${DIALOG_ID} [data-role="edit-key-label"]`).forEach((label) => {
-    label.textContent = current ? `${keyLabel(current)}${keyStatusText(current) ? `（${keyStatusText(current)}）` : ""}` : "暂无 API Key";
+    label.textContent = current ? `${keyLabel(current)}${statusText ? `（${statusText}）` : ""}` : "暂无 API Key";
   });
   document.querySelectorAll(`#${DIALOG_ID} [data-role="key-trigger"], #${DIALOG_ID} [data-role="edit-key-trigger"]`).forEach((trigger) => {
     trigger.disabled = !keysCache.length;
@@ -2260,8 +2262,12 @@ function markScrolling(node) {
 
 async function updateExistingKeyBinding(mode) {
   const result = await bindChannelToKey(selectedKeyID, currentChannelID(), mode);
-  if (mode === "append" && result.alreadyBound) setStatus("当前渠道已在选中 Key 的绑定列表中");
-  else setStatus(mode === "replace" ? `已替换选中 Key 的渠道绑定${result.enabledKey ? "（Key 已自动启用）" : ""}` : `已追加当前渠道到选中 Key${result.enabledKey ? "（Key 已自动启用）" : ""}`);
+  if (mode === "append" && result.alreadyBound) {
+    setStatus("当前渠道已在选中 Key 的绑定列表中");
+    return;
+  }
+  const suffix = result.enabledKey ? "（Key 已自动启用）" : "";
+  setStatus(`${mode === "replace" ? "已替换选中 Key 的渠道绑定" : "已追加当前渠道到选中 Key"}${suffix}`);
 }
 
 async function createKeyAndBind() {
@@ -2301,7 +2307,6 @@ function updateCachedKeyStatus(keyID, status) {
   const key = keysCache.find((entry) => entry.id === keyID);
   if (!key) return;
   key.status = status;
-  syncKeyPicker();
   renderKeyOptions();
 }
 
@@ -2416,14 +2421,12 @@ function syncActionButtons() {
 async function copySelectedKey() {
   const keyID = selectedKeyID;
   if (!keyID) throw new Error("请先选择 API Key");
-  const cached = keysCache.find((key) => key.id === keyID);
   const data = await graphql(queries.getKeyValue, { id: keyID }, "GetApiKeyValue");
-  const value = data?.node?.key || cached?.key || "";
+  const value = data?.node?.key || "";
   if (!value) {
-    const statusText = keyStatusText(cached || data?.node);
-    throw new Error(statusText === "已禁用" ? "读取密钥值失败（Key 处于禁用状态）" : "读取密钥值失败，请刷新后重试");
+    const status = keysCache.find((key) => key.id === keyID)?.status || data?.node?.status;
+    throw new Error(status === "disabled" ? "读取密钥值失败（Key 处于禁用状态）" : "读取密钥值失败，请刷新后重试");
   }
-  if (cached && !cached.key) cached.key = value;
   await navigator.clipboard.writeText(value);
   setStatus("已复制密钥");
 }

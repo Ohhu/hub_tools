@@ -1,6 +1,6 @@
 const queries = {
   createKey: "mutation CreateAPIKey($input:CreateAPIKeyInput!){createAPIKey(input:$input){id key name status type}}",
-  getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name key status user{id}}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
+  getKeys: "query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name status}cursor}pageInfo{hasNextPage endCursor}totalCount}}",
   getKey: "query GetApiKey($id:ID!){node(id:$id){... on APIKey{id name status user{id} profiles{activeProfile profiles{name modelMappings{from to} channelIDs channelTags channelTagsMatchMode modelIDs loadBalanceStrategy channelBindingMode dynamicChannelStrategy{mode maxChannels minChannels maxPriceMultiplier maxLatencyMs minSuccessRate onlyOfficial includeTags excludeTags excludeChannelIDs fallbackChannelIDs} quota{requests totalTokens cost period{type pastDuration{value unit} calendarDuration{unit}}}}}}}}",
   getKeyValue: "query GetApiKeyValue($id:ID!){node(id:$id){... on APIKey{id key status user{id}}}}",
   getChannelName: "query GetChannelName($id:ID!){node(id:$id){... on Channel{id name}}}",
