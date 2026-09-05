@@ -100,6 +100,7 @@
       sortKeys,
       renameKeyIfChanged,
       rotateKey,
+      archiveKey,
       keyArchiveName,
       renderKeyStatusBadge,
       renderKeyStatusToggle,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.4.12
+// @version      0.4.13
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only

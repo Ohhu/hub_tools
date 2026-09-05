@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.4.12
+// @version      0.4.13
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -2049,11 +2049,36 @@ function renderKeyOptions() {
   syncKeyPicker();
 }
 
-// option 主体负责选中，开关/更新按钮/状态徽章为同级节点，避免 button 嵌套破坏 DOM 结构。
+// option 主体负责选中，动作按钮与状态徽章为同级节点，避免 button 嵌套破坏 DOM 结构。
+// 动作顺序：启用（开关）→ 更新（轮换）→ 归档；archived 行仅保留状态徽章。
 function renderKeyOptionRow(key) {
-  const status = renderKeyStatusToggle(key);
-  const rotate = key.status === "archived" ? "" : `<button type="button" class="hkb-key-rotate" data-action="rotate-key" data-key-id="${escapeHtml(key.id)}" title="更新密钥" aria-label="更新密钥 ${escapeHtml(keyLabel(key))}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M16 8h5V3"></path></svg></button>`;
-  return `<li class="hkb-key-option-row" role="option" aria-selected="${String(key.id === selectedKeyID)}" data-key-id="${escapeHtml(key.id)}"><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}"><span>${escapeHtml(keyLabel(key))}</span></button>${rotate}${status}</li>`;
+  if (key.status === "archived") {
+    return `<li class="hkb-key-option-row" role="option" aria-selected="${String(key.id === selectedKeyID)}" data-key-id="${escapeHtml(key.id)}"><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}"><span>${escapeHtml(keyLabel(key))}</span></button>${renderKeyStatusBadge(key)}</li>`;
+  }
+  return `<li class="hkb-key-option-row" role="option" aria-selected="${String(key.id === selectedKeyID)}" data-key-id="${escapeHtml(key.id)}"><button type="button" class="hkb-key-option" data-action="select-key" data-key-id="${escapeHtml(key.id)}"><span>${escapeHtml(keyLabel(key))}</span></button>${renderKeyStatusToggle(key)}${renderKeyRotateButton(key)}${renderKeyArchiveButton(key)}</li>`;
+}
+
+function renderKeyRotateButton(key) {
+  const label = keyLabel(key);
+  return `<button type="button" class="hkb-key-act" data-action="rotate-key" data-key-id="${escapeHtml(key.id)}" title="更新密钥" aria-label="更新密钥 ${escapeHtml(label)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M16 8h5V3"></path></svg></button>`;
+}
+
+function renderKeyArchiveButton(key) {
+  const label = keyLabel(key);
+  return `<button type="button" class="hkb-key-act" data-action="archive-key" data-key-id="${escapeHtml(key.id)}" title="归档" aria-label="归档 ${escapeHtml(label)}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="4" x="3" y="4" rx="1"></rect><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"></path><path d="M10 12h4"></path></svg></button>`;
+}
+
+// 归档：改名 #id 后归档，与轮换密钥同一命名约定，便于在密钥页识别来源。
+async function archiveKey(keyID) {
+  if (!keyID) throw new Error("请选择 API Key");
+  const key = keysCache.find((entry) => entry.id === keyID);
+  if (!key) throw new Error("未找到该 API Key");
+  if (key.status === "archived") throw new Error("已归档 Key 不支持重复归档");
+  const archivedName = keyArchiveName(keyID) || keyLabel(key);
+  await graphql(queries.updateKey, { id: keyID, input: { name: archivedName } }, "UpdateAPIKey");
+  await graphql(queries.updateKeyStatus, { id: keyID, status: "archived" }, "UpdateAPIKeyStatus");
+  await loadKeys(true);
+  return "archived";
 }
 
 const KEY_STATUS_LABELS = { enabled: "已启用", disabled: "已禁用", archived: "已归档" };
@@ -2607,9 +2632,9 @@ function escapeHtml(value) {
       html.dark td.${MULTIPLIER_COLUMN_CLASS}.${MULTIPLIER_HIGH_TONE_CLASS}{color:#fc6b83}
       html.dark .${MULTIPLIER_COLUMN_HEADER_CLASS}{color:var(--muted-foreground,oklch(0.7713 0.0169 99.0657))}
       #${DIALOG_ID}{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgb(0 0 0 / .48);padding:16px;color:var(--foreground,#111827);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}#${DIALOG_ID}[hidden]{display:none}
-      #${DIALOG_ID} .hkb-card{width:min(420px,100%);height:388px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
+      #${DIALOG_ID} .hkb-card{width:min(480px,100%);height:392px;box-sizing:border-box;background:var(--card,#fff);border:1px solid var(--border,rgba(229,231,235,.9));color:var(--card-foreground,var(--foreground,#111827));border-radius:14px;padding:24px;box-shadow:0 24px 60px -24px rgb(15 23 42 / .55),0 10px 24px -20px rgb(15 23 42 / .35)}
       #${DIALOG_ID} .hkb-switch{display:flex;gap:0;margin-bottom:22px}
-      #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--muted-foreground,#9ca3af);font-size:15px;font-weight:650;padding:0 18px 11px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:var(--foreground,#4b5563)}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:var(--foreground,#111827);border-bottom-color:var(--primary,var(--foreground,#111827))}
+      #${DIALOG_ID} .hkb-mode{min-height:auto;border:none;border-bottom:2px solid transparent;background:transparent;color:var(--muted-foreground,#9ca3af);font-size:15px;font-weight:650;padding:0 16px 10px;cursor:pointer;transition:color .15s,border-color .15s}#${DIALOG_ID} .hkb-mode:hover{color:var(--foreground,#4b5563)}#${DIALOG_ID} .hkb-mode[aria-selected="true"]{color:var(--foreground,#111827);border-bottom-color:var(--primary,var(--foreground,#111827))}
       #${DIALOG_ID} [data-view-panel]{height:100%;display:grid;grid-template-rows:auto 1fr auto}
       #${DIALOG_ID} [data-view-panel][hidden]{display:none}
       #${DIALOG_ID} .hkb-grid{display:grid;gap:16px;min-height:0;align-content:start}
@@ -2621,16 +2646,16 @@ function escapeHtml(value) {
       #${DIALOG_ID} [data-key-panel]{min-height:70px}
       #${DIALOG_ID} .hkb-field{display:grid;gap:6px}
       #${DIALOG_ID} .hkb-label{font-size:13px;font-weight:650;color:var(--foreground,#374151)}
-      #${DIALOG_ID} .hkb-control{width:100%;min-height:40px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 18%,transparent);color:var(--foreground,#111827);font:inherit;font-size:14px;line-height:20px;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
+      #${DIALOG_ID} .hkb-control{width:100%;min-height:36px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 18%,transparent);color:var(--foreground,#111827);font:inherit;font-size:14px;line-height:20px;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s,background .15s}
       #${DIALOG_ID} .hkb-control:focus,#${DIALOG_ID} .hkb-control[aria-expanded="true"]{background:var(--popover,var(--card,#fff));border-color:var(--ring,#9ca3af);box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#111827) 18%,transparent)}
-      #${DIALOG_ID} .hkb-channel-tag{display:flex;align-items:center;min-height:40px}
-      #${DIALOG_ID} input[type="text"]{height:40px}
+      #${DIALOG_ID} .hkb-channel-tag{display:flex;align-items:center;min-height:36px}
+      #${DIALOG_ID} input[type="text"]{height:36px}
       #${DIALOG_ID} .hkb-copy-new{border-color:var(--border,#d1d5db);background:var(--card,#fff);color:var(--foreground,#374151);white-space:nowrap}#${DIALOG_ID} .hkb-copy-new:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#374151))}
       #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:8px}#${DIALOG_ID} .hkb-key-picker{position:relative;flex:1;min-width:0}#${DIALOG_ID} .hkb-key-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer}#${DIALOG_ID} .hkb-key-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-trigger::after{content:"";width:8px;height:8px;border-right:1.5px solid var(--muted-foreground,#6b7280);border-bottom:1.5px solid var(--muted-foreground,#6b7280);transform:rotate(45deg) translateY(-2px);flex-shrink:0;transition:transform .15s}#${DIALOG_ID} .hkb-key-trigger[aria-expanded="true"]::after{transform:rotate(225deg) translateY(-1px)}
-      #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:232px;overflow:auto;margin:0;padding:6px;list-style:none;background:var(--popover,var(--card,#fff));border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 18px 48px -24px rgb(15 23 42 / .55),0 8px 20px -18px rgb(15 23 42 / .45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
-      #${DIALOG_ID} .hkb-key-option-row{display:flex;align-items:center;gap:4px;min-height:36px;border-radius:8px;padding-right:6px}#${DIALOG_ID} .hkb-key-option-row[aria-selected="true"]{background:var(--accent,#f3f4f6)}#${DIALOG_ID} .hkb-key-option{flex:1;min-width:0;min-height:36px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:var(--popover-foreground,var(--foreground,#111827));text-align:left;padding:7px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-option-row[aria-selected="true"] .hkb-key-option::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700}#${DIALOG_ID} .hkb-key-option-row:not([aria-selected="true"]) .hkb-key-option::before{content:"";width:12px;flex-shrink:0}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-rotate{height:26px;width:26px;min-height:26px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s}#${DIALOG_ID} .hkb-key-rotate:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-key-rotate:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-key-rotate svg{width:14px;height:14px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}#${DIALOG_ID} .hkb-key-status{flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:650;line-height:16px;white-space:nowrap}#${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border:1px solid color-mix(in oklab,var(--destructive,#dc2626) 35%,transparent);background:color-mix(in oklab,var(--destructive,#dc2626) 10%,transparent);color:var(--destructive,#dc2626)}#${DIALOG_ID} .hkb-key-status[data-status="archived"]{border:1px solid var(--border,#e5e7eb);background:var(--secondary,#f3f4f6);color:var(--muted-foreground,#6b7280)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border-color:color-mix(in oklab,var(--destructive,#fc6b83) 45%,transparent);background:color-mix(in oklab,var(--destructive,#fc6b83) 14%,transparent);color:var(--destructive,#fc6b83)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="archived"]{border-color:var(--border,rgb(255 255 255/.09));background:color-mix(in oklab,white 8%,transparent);color:var(--muted-foreground,#9ca3af)}
+      #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:272px;overflow:auto;margin:0;padding:6px;list-style:none;background:var(--popover,var(--card,#fff));border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 18px 48px -24px rgb(15 23 42 / .55),0 8px 20px -18px rgb(15 23 42 / .45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
+      #${DIALOG_ID} .hkb-key-option-row{display:flex;align-items:center;gap:2px;min-height:34px;border-radius:8px;padding-right:4px}#${DIALOG_ID} .hkb-key-option-row[aria-selected="true"]{background:var(--accent,#f3f4f6)}#${DIALOG_ID} .hkb-key-option{flex:1;min-width:0;min-height:34px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:var(--popover-foreground,var(--foreground,#111827));text-align:left;padding:6px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-option-row[aria-selected="true"] .hkb-key-option::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700}#${DIALOG_ID} .hkb-key-option-row:not([aria-selected="true"]) .hkb-key-option::before{content:"";width:12px;flex-shrink:0}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-act{height:24px;width:24px;min-height:24px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s}#${DIALOG_ID} .hkb-key-act:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-key-act:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-key-act svg{width:13px;height:13px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}#${DIALOG_ID} .hkb-key-act[data-action="archive-key"]:hover{color:var(--destructive,#dc2626);background:color-mix(in oklab,var(--destructive,#dc2626) 8%,transparent)}#${DIALOG_ID} .hkb-key-status{flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:650;line-height:16px;white-space:nowrap}#${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border:1px solid color-mix(in oklab,var(--destructive,#dc2626) 35%,transparent);background:color-mix(in oklab,var(--destructive,#dc2626) 10%,transparent);color:var(--destructive,#dc2626)}#${DIALOG_ID} .hkb-key-status[data-status="archived"]{border:1px solid var(--border,#e5e7eb);background:var(--secondary,#f3f4f6);color:var(--muted-foreground,#6b7280)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border-color:color-mix(in oklab,var(--destructive,#fc6b83) 45%,transparent);background:color-mix(in oklab,var(--destructive,#fc6b83) 14%,transparent);color:var(--destructive,#fc6b83)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="archived"]{border-color:var(--border,rgb(255 255 255/.09));background:color-mix(in oklab,white 8%,transparent);color:var(--muted-foreground,#9ca3af)}
       #${DIALOG_ID} .hkb-key-toggle{box-sizing:border-box;height:16px;min-height:16px;width:28px;border:1px solid transparent;border-radius:999px;background:color-mix(in oklab,var(--muted-foreground,#6b7280) 38%,transparent);padding:0;cursor:pointer;display:inline-flex;align-items:center;flex-shrink:0;overflow:hidden;transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease}#${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-track{display:block;width:100%;height:100%;position:relative}#${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-thumb{position:absolute;top:1.5px;left:1.5px;width:11px;height:11px;border-radius:999px;background:#fff;box-shadow:0 1px 2px rgb(15 23 42 / .35);transition:left .15s ease,background-color .15s ease}#${DIALOG_ID} .hkb-key-toggle[aria-checked="true"]{background:var(--primary,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-toggle[aria-checked="true"] .hkb-key-toggle-thumb{left:calc(100% - 12.5px)}#${DIALOG_ID} .hkb-key-toggle:hover{border-color:color-mix(in oklab,var(--primary,var(--foreground,#111827)) 35%,transparent)}#${DIALOG_ID} .hkb-key-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-key-toggle:disabled{cursor:not-allowed;opacity:.5}html.dark #${DIALOG_ID} .hkb-key-toggle{background:color-mix(in oklab,white 28%,transparent)}html.dark #${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-thumb{background:#e4e4e4}html.dark #${DIALOG_ID} .hkb-key-toggle[aria-checked="true"]{background:var(--primary,#e4e4e4)}html.dark #${DIALOG_ID} .hkb-key-toggle[aria-checked="true"] .hkb-key-toggle-thumb{background:#111827}
-      #${DIALOG_ID} .hkb-icon-btn{height:32px;width:32px;min-height:32px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
+      #${DIALOG_ID} .hkb-icon-btn{height:28px;width:28px;min-height:28px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
       #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}
       #${DIALOG_ID} .hkb-edit-list{height:100%;min-height:92px;overflow:auto;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:color-mix(in oklab,var(--input,#e5e7eb) 14%,transparent);padding:4px;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .15s;touch-action:pan-y;user-select:none}#${DIALOG_ID} .hkb-edit-list:hover,#${DIALOG_ID} .hkb-edit-list:focus-within,#${DIALOG_ID} .hkb-edit-list.is-scrolling{scrollbar-color:var(--border,#cbd5e1) transparent}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar{width:6px}#${DIALOG_ID} .hkb-edit-list::-webkit-scrollbar-thumb{background:transparent;border-radius:999px}#${DIALOG_ID} .hkb-edit-list:hover::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list:focus-within::-webkit-scrollbar-thumb,#${DIALOG_ID} .hkb-edit-list.is-scrolling::-webkit-scrollbar-thumb{background:var(--border,#cbd5e1)}
@@ -2642,7 +2667,7 @@ function escapeHtml(value) {
       #${DIALOG_ID} [data-action="save-edit"][data-dirty="true"]::after{content:"";position:absolute;right:-3px;top:-3px;width:7px;height:7px;border-radius:999px;background:var(--primary,#111827);box-shadow:0 0 0 2px var(--card,#fff)}
       #${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{display:flex;align-items:center;gap:8px}
       #${DIALOG_ID} .hkb-status{color:var(--muted-foreground,#6b7280);font-size:12px;line-height:16px;flex:1;min-width:0;text-align:center}
-      #${DIALOG_ID} button:not(.hkb-icon-btn):not(.hkb-key-toggle):not(.hkb-key-rotate){box-sizing:border-box;height:36px;min-height:36px;line-height:20px;border-radius:8px;border:1px solid transparent;padding:0 16px;font:inherit;font-size:14px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}#${DIALOG_ID} .hkb-key-option:disabled{cursor:default;opacity:1}
+      #${DIALOG_ID} button:not(.hkb-icon-btn):not(.hkb-key-toggle):not(.hkb-key-act){box-sizing:border-box;height:32px;min-height:32px;line-height:18px;border-radius:8px;border:1px solid transparent;padding:0 14px;font:inherit;font-size:13.5px;font-weight:500;cursor:pointer;transition:background .15s,opacity .15s}#${DIALOG_ID} button:disabled{cursor:not-allowed;opacity:.5}#${DIALOG_ID} .hkb-key-option:disabled{cursor:default;opacity:1}
       #${DIALOG_ID} .hkb-primary{border-color:var(--primary,#111827);background:var(--primary,#111827);color:var(--primary-foreground,#f9fafb)}#${DIALOG_ID} .hkb-primary:hover{background:color-mix(in oklab,var(--primary,#111827) 88%,white)}#${DIALOG_ID} .hkb-secondary{border-color:var(--border,#d1d5db);background:var(--secondary,#f3f4f6);color:var(--secondary-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-secondary:hover{background:var(--accent,#e5e7eb);color:var(--accent-foreground,var(--foreground,#374151))}#${DIALOG_ID} .hkb-ghost{border-color:transparent;background:transparent;color:var(--muted-foreground,#374151)}#${DIALOG_ID} .hkb-ghost:hover{background:var(--accent,#f9fafb);color:var(--accent-foreground,var(--foreground,#374151))}
       @media (max-width:360px){#${DIALOG_ID}{padding:8px}#${DIALOG_ID} .hkb-card{height:min(388px,calc(100vh - 16px));padding:16px}#${DIALOG_ID} .hkb-edit-row{grid-template-columns:1fr;gap:6px}#${DIALOG_ID} .hkb-edit-row-list .hkb-label{padding-top:0}#${DIALOG_ID} .hkb-actions{flex-wrap:wrap;align-items:flex-start}#${DIALOG_ID} .hkb-action-left,#${DIALOG_ID} .hkb-action-right{flex-wrap:wrap}#${DIALOG_ID} .hkb-status{flex-basis:100%;order:3}}
       html.dark #${DIALOG_ID}{background:rgb(0 0 0 / .56);color:var(--foreground)}
@@ -2694,6 +2719,18 @@ function escapeHtml(value) {
         setStatus("已更新密钥");
       } catch (error) {
         setStatus(error?.message || "更新密钥失败");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (action === "archive-key") {
+      try {
+        setBusy(true);
+        await archiveKey(actionEl.dataset.keyId || "");
+        setStatus("已归档");
+      } catch (error) {
+        setStatus(error?.message || "归档失败");
       } finally {
         setBusy(false);
       }
@@ -2939,6 +2976,7 @@ function escapeHtml(value) {
       sortKeys,
       renameKeyIfChanged,
       rotateKey,
+      archiveKey,
       keyArchiveName,
       renderKeyStatusBadge,
       renderKeyStatusToggle,

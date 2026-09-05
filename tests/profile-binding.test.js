@@ -187,6 +187,31 @@ async function main() {
     helpers.__setKeysCacheForTest([]);
   }
 
+  // ===== 归档（0.4.13）：archiveKey 改名 #id 后归档 =====
+  {
+    callLog.length = 0;
+    helpers.__setGraphqlForTest(async (query, variables, op) => {
+      callLog.push([op, variables]);
+      if (op === "UpdateAPIKey") return { updateAPIKey: { id: variables.id, name: variables.input.name, status: "enabled" } };
+      if (op === "UpdateAPIKeyStatus") return { updateAPIKeyStatus: { id: variables.id, status: variables.status } };
+      if (op === "Me") return { me: { id: "gid://axonhub/User/1", projects: [] } };
+      if (op === "GetApiKeys") return { apiKeys: { edges: [], pageInfo: { hasNextPage: false } } };
+      return {};
+    });
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/71966", name: "主力", status: "enabled" }]);
+    const result = await helpers.archiveKey("gid://axonhub/APIKey/71966");
+    // 顺序：改名 #id -> 状态置 archived -> 刷新列表（Me 已缓存）
+    assert.deepEqual(callLog.map(([op]) => op), ["UpdateAPIKey", "UpdateAPIKeyStatus", "GetApiKeys"]);
+    assert.equal(callLog[0][1].input.name, "#71966");
+    assert.equal(callLog[1][1].status, "archived");
+    assert.equal(result, "archived");
+
+    // 已归档拒绝
+    helpers.__setKeysCacheForTest([{ id: "gid://axonhub/APIKey/71966", name: "#71966", status: "archived" }]);
+    await assert.rejects(helpers.archiveKey("gid://axonhub/APIKey/71966"), /已归档/);
+    helpers.__setKeysCacheForTest([]);
+  }
+
   helpers.__setGraphqlForTest(null);
 
   await Promise.resolve();
