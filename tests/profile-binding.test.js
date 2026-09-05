@@ -146,12 +146,57 @@ async function main() {
     await assert.rejects(helpers.renameKeyIfChanged("gid://axonhub/APIKey/1", "旧名字", "  "), /名称不能为空/);
   }
 
+  // ===== profiles 完整复制（0.4.14）：轮换迁移 buildProfilesInputCopy =====
+  {
+    // 空 payload：回落为单个 default
+    assert.deepEqual(plain(helpers.buildProfilesInputCopy(null)), { activeProfile: "default", profiles: [{ name: "default" }] });
+
+    // 富配置保真：dynamic 绑定、策略、配额、路由策略、模型映射全保留；null 与未知字段剔除
+    const rich = plain(helpers.buildProfilesInputCopy({
+      activeProfile: "auto",
+      profiles: [
+        {
+          name: "default",
+          modelMappings: [{ from: "gpt-5.5", to: "gpt-5.5-pro" }, { from: "x" }],
+          channelIDs: [1, 2, "bad"],
+          channelTags: null,
+          channelTagsMatchMode: "any",
+          modelIDs: ["gpt-5.5"],
+          loadBalanceStrategy: "round_robin",
+          channelBindingMode: "manual",
+          quota: { requests: 100, totalTokens: null, cost: "12.5", period: { type: "past_duration", pastDuration: { value: 24, unit: "hour" }, calendarDuration: null } },
+          routingPolicy: { channelWeights: [{ channelID: 1, weight: 2 }, { channelID: "x", weight: 1 }], includeProviders: null },
+          dynamicChannelStrategy: null,
+          updatedAt: "2026-09-05", // 未知字段应被剔除
+        },
+        { name: "auto", channelBindingMode: "dynamic", dynamicChannelStrategy: { mode: "balanced", selectionPolicy: "sticky_hrw", maxChannels: 3, excludeTags: null } },
+      ],
+    }));
+    assert.equal(rich.activeProfile, "auto");
+    assert.equal(rich.profiles.length, 2);
+    const manual = rich.profiles[0];
+    assert.deepEqual(manual.modelMappings, [{ from: "gpt-5.5", to: "gpt-5.5-pro" }]); // 缺 to 的条目剔除
+    assert.deepEqual(manual.channelIDs, [1, 2]);
+    assert.equal(manual.loadBalanceStrategy, "round_robin");
+    assert.deepEqual(manual.quota, { requests: 100, cost: "12.5", period: { type: "past_duration", pastDuration: { value: 24, unit: "hour" } } });
+    assert.deepEqual(manual.routingPolicy, { channelWeights: [{ channelID: 1, weight: 2 }] }); // 非法权重剔除，空 includeProviders 剔除
+    assert.equal("updatedAt" in manual, false);
+    assert.equal("dynamicChannelStrategy" in manual, false); // null 不提交
+    const dynamic = rich.profiles[1];
+    assert.equal(dynamic.channelBindingMode, "dynamic");
+    assert.deepEqual(dynamic.dynamicChannelStrategy, { mode: "balanced", selectionPolicy: "sticky_hrw", maxChannels: 3 });
+
+    // 必填字段缺失时降级：quota 缺 period、策略缺 mode、空 routingPolicy 均不提交而非报错
+    const degraded = plain(helpers.buildProfilesInputCopy({ activeProfile: "default", profiles: [{ name: "default", quota: { requests: 5 }, dynamicChannelStrategy: { maxChannels: 2 }, routingPolicy: {} }] }));
+    assert.deepEqual(degraded.profiles[0], { name: "default" });
+  }
+
   // ===== 更新密钥（0.4.12）：rotateKey 轮换流程 =====
   {
     callLog.length = 0;
     helpers.__setGraphqlForTest(async (query, variables, op) => {
       callLog.push([op, variables]);
-      if (op === "GetApiKey") return { node: { id: variables.id, name: "主力", status: "enabled", profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1, 2] }] } } };
+      if (op === "GetApiKey") return { node: { id: variables.id, name: "主力", status: "enabled", profiles: { activeProfile: "default", profiles: [{ name: "default", channelIDs: [1, 2], modelMappings: [{ from: "gpt-5.5", to: "gpt-5.5-pro" }] }, { name: "auto", channelBindingMode: "dynamic", dynamicChannelStrategy: { mode: "balanced", maxChannels: 3 } }] } } };
       if (op === "UpdateAPIKey") return { updateAPIKey: { id: variables.id, name: variables.input.name, status: "enabled" } };
       if (op === "UpdateAPIKeyStatus") return { updateAPIKeyStatus: { id: variables.id, status: variables.status } };
       if (op === "CreateAPIKey") return { createAPIKey: { id: "gid://axonhub/APIKey/999", key: "ah-newkey", name: variables.input.name, status: "enabled", type: "user" } };
@@ -173,6 +218,12 @@ async function main() {
     assert.equal(callLog[2][1].status, "archived");
     assert.equal(callLog[3][1].input.name, "主力");
     assert.equal(JSON.stringify(callLog[4][1].input.profiles[0].channelIDs), "[1,2]");
+    // 0.4.14：迁移输入为完整复制，两个 profile 原样回写（含 dynamic 绑定与模型映射）
+    assert.equal(callLog[4][1].input.activeProfile, "default");
+    assert.equal(callLog[4][1].input.profiles.length, 2);
+    assert.equal(callLog[4][1].input.profiles[0].modelMappings[0].to, "gpt-5.5-pro");
+    assert.equal(callLog[4][1].input.profiles[1].channelBindingMode, "dynamic");
+    assert.equal(callLog[4][1].input.profiles[1].dynamicChannelStrategy.mode, "balanced");
     assert.equal(created.id, "gid://axonhub/APIKey/999");
 
     // 新旧名称相同时仍可轮换（旧 Key 改名 #id，新 Key 沿用原名）

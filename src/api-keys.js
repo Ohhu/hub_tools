@@ -22,6 +22,60 @@ function buildProfilesInputWithChannelIDs(profilesPayload, channelIDs) {
   return { activeProfile, profiles };
 }
 
+// —— profiles 完整复制（0.4.14）：轮换密钥时把读到的绑定配置原样回写给新 Key ——
+// 输出与输入字段同名（内省实测一致），白名单挑选 + 剔除 null 与必填字段缺失的节点即可，
+// manual/dynamic 绑定、模型映射、配额、负载与路由策略全部保真，不重置为手动绑定。
+
+const PROFILE_INPUT_KEYS = ["name", "modelMappings", "channelIDs", "channelTags", "channelTagsMatchMode", "modelIDs", "loadBalanceStrategy", "channelBindingMode", "quota", "routingPolicy", "dynamicChannelStrategy"];
+
+function pruneInputNulls(value) {
+  if (Array.isArray(value)) return value.map(pruneInputNulls);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value)) {
+      if (value[key] === null || value[key] === undefined) continue;
+      out[key] = pruneInputNulls(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+// 列表内剔除缺必填字段的条目；清空后整个字段不提交（与省略等价）。
+function keepCompleteEntries(input, key, isComplete) {
+  if (!Array.isArray(input[key])) return;
+  const kept = input[key].filter(isComplete);
+  if (kept.length) input[key] = kept;
+  else delete input[key];
+}
+
+function buildProfileInputCopy(profile) {
+  const input = pruneInputNulls(profile && typeof profile === "object" ? profile : {});
+  for (const key of Object.keys(input)) {
+    if (!PROFILE_INPUT_KEYS.includes(key)) delete input[key];
+  }
+  input.name = String(input.name || "default");
+  if (Array.isArray(input.channelIDs)) input.channelIDs = input.channelIDs.filter((id) => Number.isInteger(id));
+  keepCompleteEntries(input, "modelMappings", (item) => item?.from != null && item?.to != null);
+  if (input.quota && !input.quota.period?.type) delete input.quota; // period.type 必填，缺失则放弃配额字段而非让迁移失败
+  if (input.routingPolicy) {
+    keepCompleteEntries(input.routingPolicy, "channelWeights", (item) => Number.isInteger(item?.channelID) && typeof item?.weight === "number");
+    keepCompleteEntries(input.routingPolicy, "providerWeights", (item) => item?.provider != null && typeof item?.weight === "number");
+    keepCompleteEntries(input.routingPolicy, "allowChannelAPIKeys", (item) => Number.isInteger(item?.channelID) && Array.isArray(item?.keyHashes) && item.keyHashes.length > 0);
+    keepCompleteEntries(input.routingPolicy, "excludeChannelAPIKeys", (item) => Number.isInteger(item?.channelID) && Array.isArray(item?.keyHashes) && item.keyHashes.length > 0);
+    if (!Object.keys(input.routingPolicy).length) delete input.routingPolicy;
+  }
+  if (input.dynamicChannelStrategy && !input.dynamicChannelStrategy.mode) delete input.dynamicChannelStrategy; // mode 必填
+  return input;
+}
+
+function buildProfilesInputCopy(profilesPayload) {
+  const activeProfile = profilesPayload?.activeProfile || "default";
+  const source = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
+  const profiles = source.length ? source.map((profile) => buildProfileInputCopy(profile)) : [{ name: activeProfile }];
+  return { activeProfile, profiles };
+}
+
 function getActiveProfile(profilesPayload) {
   const activeProfile = profilesPayload?.activeProfile || "default";
   const profiles = Array.isArray(profilesPayload?.profiles) ? profilesPayload.profiles : [];
@@ -578,7 +632,7 @@ function keyArchiveName(keyID) {
   return match ? `#${match[1]}` : "";
 }
 
-// 轮换密钥：旧 Key 改名为其数字 id（如 #71966）并归档，用当前名称创建新 Key 并迁移绑定配置。
+// 轮换密钥：旧 Key 改名为其数字 id（如 #71966）并归档，用当前名称创建新 Key 并完整复制 profiles 配置（含 dynamic 绑定、模型映射、配额与路由策略）。
 // 完成后选中并缓存新 Key 明文，复制按钮即可复制新密钥。
 async function rotateKey(keyID, options = {}) {
   if (!keyID) throw new Error("请选择 API Key");
@@ -592,7 +646,7 @@ async function rotateKey(keyID, options = {}) {
   await graphql(queries.updateKey, { id: keyID, input: { name: archivedName } }, "UpdateAPIKey");
   await graphql(queries.updateKeyStatus, { id: keyID, status: "archived" }, "UpdateAPIKeyStatus");
   const created = await createKey(nextName);
-  const input = buildProfilesInputWithChannelIDs(data.node.profiles, currentProfileChannelIDs(data.node.profiles));
+  const input = buildProfilesInputCopy(data.node.profiles);
   await graphql(queries.updateProfiles, { id: created.id, input }, "UpdateAPIKeyProfiles");
   await loadKeys(true);
   selectedKeyID = created.id;
@@ -753,7 +807,7 @@ function escapeHtml(value) {
       #${DIALOG_ID} .hkb-select-row{display:flex;align-items:center;gap:8px}#${DIALOG_ID} .hkb-key-picker{position:relative;flex:1;min-width:0}#${DIALOG_ID} .hkb-key-trigger{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;cursor:pointer}#${DIALOG_ID} .hkb-key-trigger span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-trigger::after{content:"";width:8px;height:8px;border-right:1.5px solid var(--muted-foreground,#6b7280);border-bottom:1.5px solid var(--muted-foreground,#6b7280);transform:rotate(45deg) translateY(-2px);flex-shrink:0;transition:transform .15s}#${DIALOG_ID} .hkb-key-trigger[aria-expanded="true"]::after{transform:rotate(225deg) translateY(-1px)}
       #${DIALOG_ID} .hkb-key-menu{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:1;max-height:272px;overflow:auto;margin:0;padding:6px;list-style:none;background:var(--popover,var(--card,#fff));border:1px solid var(--border,#e5e7eb);border-radius:12px;box-shadow:0 18px 48px -24px rgb(15 23 42 / .55),0 8px 20px -18px rgb(15 23 42 / .45)}#${DIALOG_ID} .hkb-key-menu[hidden]{display:none}
       #${DIALOG_ID} .hkb-key-option-row{display:flex;align-items:center;gap:2px;min-height:34px;border-radius:8px;padding-right:4px}#${DIALOG_ID} .hkb-key-option-row[aria-selected="true"]{background:var(--accent,#f3f4f6)}#${DIALOG_ID} .hkb-key-option{flex:1;min-width:0;min-height:34px;display:flex;align-items:center;gap:8px;border:none;border-radius:8px;background:transparent;color:var(--popover-foreground,var(--foreground,#111827));text-align:left;padding:6px 10px;font-size:14px;font-weight:500}#${DIALOG_ID} .hkb-key-option:hover{background:var(--accent,#f3f4f6);color:var(--accent-foreground,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-option-row[aria-selected="true"] .hkb-key-option::before{content:"✓";color:var(--primary,var(--foreground,#111827));font-weight:700}#${DIALOG_ID} .hkb-key-option-row:not([aria-selected="true"]) .hkb-key-option::before{content:"";width:12px;flex-shrink:0}#${DIALOG_ID} .hkb-key-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#${DIALOG_ID} .hkb-key-act{height:24px;width:24px;min-height:24px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s}#${DIALOG_ID} .hkb-key-act:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-key-act:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-key-act svg{width:13px;height:13px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}#${DIALOG_ID} .hkb-key-act[data-action="archive-key"]:hover{color:var(--destructive,#dc2626);background:color-mix(in oklab,var(--destructive,#dc2626) 8%,transparent)}#${DIALOG_ID} .hkb-key-status{flex-shrink:0;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:650;line-height:16px;white-space:nowrap}#${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border:1px solid color-mix(in oklab,var(--destructive,#dc2626) 35%,transparent);background:color-mix(in oklab,var(--destructive,#dc2626) 10%,transparent);color:var(--destructive,#dc2626)}#${DIALOG_ID} .hkb-key-status[data-status="archived"]{border:1px solid var(--border,#e5e7eb);background:var(--secondary,#f3f4f6);color:var(--muted-foreground,#6b7280)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="disabled"]{border-color:color-mix(in oklab,var(--destructive,#fc6b83) 45%,transparent);background:color-mix(in oklab,var(--destructive,#fc6b83) 14%,transparent);color:var(--destructive,#fc6b83)}html.dark #${DIALOG_ID} .hkb-key-status[data-status="archived"]{border-color:var(--border,rgb(255 255 255/.09));background:color-mix(in oklab,white 8%,transparent);color:var(--muted-foreground,#9ca3af)}
-      #${DIALOG_ID} .hkb-key-toggle{box-sizing:border-box;height:16px;min-height:16px;width:28px;border:1px solid transparent;border-radius:999px;background:color-mix(in oklab,var(--muted-foreground,#6b7280) 38%,transparent);padding:0;cursor:pointer;display:inline-flex;align-items:center;flex-shrink:0;overflow:hidden;transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease}#${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-track{display:block;width:100%;height:100%;position:relative}#${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-thumb{position:absolute;top:1.5px;left:1.5px;width:11px;height:11px;border-radius:999px;background:#fff;box-shadow:0 1px 2px rgb(15 23 42 / .35);transition:left .15s ease,background-color .15s ease}#${DIALOG_ID} .hkb-key-toggle[aria-checked="true"]{background:var(--primary,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-toggle[aria-checked="true"] .hkb-key-toggle-thumb{left:calc(100% - 12.5px)}#${DIALOG_ID} .hkb-key-toggle:hover{border-color:color-mix(in oklab,var(--primary,var(--foreground,#111827)) 35%,transparent)}#${DIALOG_ID} .hkb-key-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-key-toggle:disabled{cursor:not-allowed;opacity:.5}html.dark #${DIALOG_ID} .hkb-key-toggle{background:color-mix(in oklab,white 28%,transparent)}html.dark #${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-thumb{background:#e4e4e4}html.dark #${DIALOG_ID} .hkb-key-toggle[aria-checked="true"]{background:var(--primary,#e4e4e4)}html.dark #${DIALOG_ID} .hkb-key-toggle[aria-checked="true"] .hkb-key-toggle-thumb{background:#111827}
+      #${DIALOG_ID} .hkb-key-toggle{box-sizing:border-box;height:16px;min-height:16px;width:28px;border:1px solid transparent;border-radius:999px;background:color-mix(in oklab,var(--muted-foreground,#6b7280) 38%,transparent);padding:0;cursor:pointer;display:inline-flex;align-items:center;flex-shrink:0;margin-right:5.5px;overflow:hidden;transition:background-color .15s ease,border-color .15s ease,box-shadow .15s ease}#${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-track{display:block;width:100%;height:100%;position:relative}#${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-thumb{position:absolute;top:1.5px;left:1.5px;width:11px;height:11px;border-radius:999px;background:#fff;box-shadow:0 1px 2px rgb(15 23 42 / .35);transition:left .15s ease,background-color .15s ease}#${DIALOG_ID} .hkb-key-toggle[aria-checked="true"]{background:var(--primary,var(--foreground,#111827))}#${DIALOG_ID} .hkb-key-toggle[aria-checked="true"] .hkb-key-toggle-thumb{left:calc(100% - 12.5px)}#${DIALOG_ID} .hkb-key-toggle:hover{border-color:color-mix(in oklab,var(--primary,var(--foreground,#111827)) 35%,transparent)}#${DIALOG_ID} .hkb-key-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-key-toggle:disabled{cursor:not-allowed;opacity:.5}html.dark #${DIALOG_ID} .hkb-key-toggle{background:color-mix(in oklab,white 28%,transparent)}html.dark #${DIALOG_ID} .hkb-key-toggle .hkb-key-toggle-thumb{background:#e4e4e4}html.dark #${DIALOG_ID} .hkb-key-toggle[aria-checked="true"]{background:var(--primary,#e4e4e4)}html.dark #${DIALOG_ID} .hkb-key-toggle[aria-checked="true"] .hkb-key-toggle-thumb{background:#111827}
       #${DIALOG_ID} .hkb-icon-btn{height:28px;width:28px;min-height:28px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--muted-foreground,#64748b);padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;transition:color .15s,background .15s,box-shadow .15s}#${DIALOG_ID} .hkb-icon-btn:hover{color:var(--accent-foreground,var(--foreground,#0f172a));background:var(--accent,#f1f5f9)}#${DIALOG_ID} .hkb-icon-btn:focus-visible{outline:none;box-shadow:0 0 0 3px color-mix(in oklab,var(--ring,#0f172a) 20%,transparent)}#${DIALOG_ID} .hkb-icon-btn svg{width:16px;height:16px;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;fill:none;pointer-events:none}
       #${DIALOG_ID} .hkb-edit-title{display:flex;align-items:center;gap:6px;margin:-8px 0 4px -8px;font-size:15px;font-weight:650;color:var(--foreground,#111827)}
       #${DIALOG_ID} .hkb-back{height:28px;width:28px;min-height:28px}

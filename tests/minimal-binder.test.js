@@ -39,11 +39,15 @@ assert.equal(source.includes("hkb-key-option-row"), true);
 assert.equal(source.includes("hkb-key-toggle"), true);
 assert.equal(source.includes("hkb-key-toggle-track"), true);
 assert.equal(source.includes("hkb-key-act"), true);
+assert.equal(source.includes("margin-right:5.5px"), true); // 开关→更新 与 更新→归档 的视觉间距对齐（补偿图标内边距）
 assert.equal(source.includes('role="switch"'), true);
 assert.equal(source.includes("statusText ?"), false); // 选中态触发器不再拼接状态文字后缀
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.4.13"), true);
+assert.equal(source.includes("// @version      0.4.14"), true);
 assert.equal(source.includes("getKeyValue:"), true);
+assert.equal(source.includes("... on APIKey{id name status profiles{activeProfile"), true); // GetApiKey 不选 key/user，结构上杜绝明文
+assert.equal(source.includes("status user{id} profiles"), false);
+assert.equal(source.includes("routingPolicy{channelWeights"), true); // 轮换迁移读取完整路由策略
 assert.equal(source.includes("getKeys: \"query GetApiKeys($first:Int,$after:Cursor,$orderBy:APIKeyOrder,$where:APIKeyWhereInput){apiKeys(first:$first,after:$after,orderBy:$orderBy,where:$where){edges{node{id name status}cursor}pageInfo{hasNextPage endCursor}totalCount}}\""), true);
 assert.equal(source.includes("linuxdoProfile{id username name avatarTemplate avatarUrl active trustLevel silenced externalIds updatedAt}"), false);
 assert.equal(source.includes("function isTargetRoute"), true);

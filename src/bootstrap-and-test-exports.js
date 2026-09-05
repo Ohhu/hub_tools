@@ -97,6 +97,7 @@
       channelLabel,
       keyStatusText,
       bindChannelToKey,
+      buildProfilesInputCopy,
       sortKeys,
       renameKeyIfChanged,
       rotateKey,
