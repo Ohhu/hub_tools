@@ -109,6 +109,7 @@
       ensureKeyEnabledForBinding,
       updateCachedKeyStatus,
       loadMissingChannelNames,
+      marketplaceSortTextFor,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
       __setModelIDFilterForTest: (value) => { selectedMarketplaceModelID = String(value || ""); },
       __setOfficialFilterForTest: (value) => { selectedOfficialFilter = Boolean(value); },

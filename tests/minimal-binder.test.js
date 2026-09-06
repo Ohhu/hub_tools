@@ -43,7 +43,7 @@ assert.equal(source.includes("margin-right:5.5px"), true); // 开关→更新 �
 assert.equal(source.includes('role="switch"'), true);
 assert.equal(source.includes("statusText ?"), false); // 选中态触发器不再拼接状态文字后缀
 assert.equal(source.includes("// @match        https://hub.linux.do/*"), true);
-assert.equal(source.includes("// @version      0.4.14"), true);
+assert.equal(source.includes("// @version      0.4.16"), true);
 assert.equal(source.includes("getKeyValue:"), true);
 assert.equal(source.includes("... on APIKey{id name status profiles{activeProfile"), true); // GetApiKey 不选 key/user，结构上杜绝明文
 assert.equal(source.includes("status user{id} profiles"), false);
@@ -114,7 +114,8 @@ assert.equal(source.includes("pointerType: \"mouse\""), true);
 assert.equal(source.includes("trigger.click();"), false);
 assert.equal(source.includes("option.click();"), false);
 assert.equal(source.includes("倍率从低到高"), true);
-assert.equal(source.includes("综合推荐"), true);
+assert.equal(source.includes("价格从低到高"), true); // 价格升序双文案候选（渠道广场/模型详情页）
+assert.equal(source.includes("findDefaultSortOption"), true); // 关闭筛选回落站点默认＝下拉第一项，不再硬编码文案
 assert.equal(source.includes("function resetPriceFilterState"), true);
 assert.equal(source.includes("height:36px"), true);
 assert.equal(source.includes("--hkb-price-left"), false);

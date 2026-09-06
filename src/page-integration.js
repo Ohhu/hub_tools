@@ -7,8 +7,8 @@ const MARKETPLACE_VERIFICATION_ACTION_RE = /^(真伪核验|Authenticity\s+Check|
 const MARKETPLACE_SEARCH_PLACEHOLDER_RE = /渠道名称|支持模型|search/i;
 const REQUESTS_API_KEY_LABEL = "API密钥";
 const REQUEST_LOG_CHANNEL_HEADER_RE = /^(渠道|channel)$/i;
-const MARKETPLACE_FREE_SORT_TEXT = "倍率从低到高";
-const MARKETPLACE_DEFAULT_SORT_TEXT = "综合推荐";
+// 价格升序在各页面的文案不同：渠道广场「倍率从低到高」，模型详情页「价格从低到高」。按候选顺序匹配当前下拉第一命中项。
+const MARKETPLACE_PRICE_ASC_SORT_TEXTS = ["倍率从低到高", "价格从低到高"];
 
 function openSelectLikeUser(trigger) {
   dispatchPointerEvent(trigger, "pointerdown", 1);
@@ -505,24 +505,28 @@ function cleanupLegacyPriceParam() {
   history.replaceState(history.state, "", url);
 }
 
+// 官方或免费任一激活时切价格升序（文案候选见 MARKETPLACE_PRICE_ASC_SORT_TEXTS），
+// 都关闭时回落站点默认排序（下拉第一项，不硬编码文案、不记录前值）。返回 null 表示默认。
+function marketplaceSortTextFor(priceFilter, officialFilter) {
+  return priceFilter === "free" || Boolean(officialFilter) ? MARKETPLACE_PRICE_ASC_SORT_TEXTS : null;
+}
+
 function triggerMarketplaceRefresh() {
-  if (location.pathname.startsWith("/marketplace/models/")) {
-    scheduleRouteScans();
-    return;
-  }
-  const targetSort = currentPriceFilter() === "free" ? MARKETPLACE_FREE_SORT_TEXT : MARKETPLACE_DEFAULT_SORT_TEXT;
+  const targetSort = marketplaceSortTextFor(currentPriceFilter(), currentOfficialFilter());
   if (triggerMarketplaceSortRefresh(targetSort)) return;
   scheduleRouteScans();
 }
 
-function triggerMarketplaceSortRefresh(targetText) {
+function triggerMarketplaceSortRefresh(preferredTexts) {
   const trigger = findMarketplaceSortTrigger();
   if (!trigger) return false;
   const fetchStartedAt = lastMarketplaceChannelsFetchAt;
   openSelectLikeUser(trigger);
   setTimeout(() => {
-    const option = findVisibleOptionByText(targetText);
+    // 有目标文案时只选命中项（无命中则原样关回下拉，不改动排序）；无目标（回落默认）时选下拉第一项。
+    const option = preferredTexts && preferredTexts.length ? findVisibleSortOption(preferredTexts) : findDefaultSortOption();
     if (option) selectOptionLikeUser(option);
+    else if (preferredTexts) openSelectLikeUser(trigger);
   }, 0);
   setTimeout(() => {
     if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
@@ -542,10 +546,21 @@ function resetPriceFilterState() {
   return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
 }
 
-function findVisibleOptionByText(text) {
-  return Array.from(document.querySelectorAll('[role="option"]')).find((option) =>
-    cleanText(option.textContent) === text && isElementVisible(option),
-  ) || null;
+function findVisibleSortOption(preferredTexts) {
+  const options = visibleSortOptions();
+  for (const text of preferredTexts) {
+    const option = options.find((candidate) => cleanText(candidate.textContent) === text);
+    if (option) return option;
+  }
+  return null;
+}
+
+function findDefaultSortOption() {
+  return visibleSortOptions()[0] || null;
+}
+
+function visibleSortOptions() {
+  return Array.from(document.querySelectorAll('[role="option"]')).filter(isElementVisible);
 }
 
 function isElementVisible(element) {

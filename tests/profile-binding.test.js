@@ -204,6 +204,40 @@ async function main() {
     assert.equal(dual.profiles[1].name, "Auto");
     assert.equal(dual.profiles[1].routingPolicy.providerWeights[0].weight, 10);
     assert.equal(dual.profiles[1].dynamicChannelStrategy.maxChannels, 15);
+
+    // ===== 枚举脏数据清洗（0.4.15）：selectionPolicy 空串读取原样返回、回写被拒 =====
+    // 2026-09-05 实测形态：非激活 dynamic profile 的 selectionPolicy 为 ""，
+    // 追加/替换与轮换两条回写路径都剔除非法值（合法值保留，其余字段不动）。
+    {
+      const dirtyPayload = {
+        activeProfile: "default",
+        profiles: [
+          { name: "default", channelIDs: [17533] },
+          { name: "auto", channelBindingMode: "dynamic", dynamicChannelStrategy: { mode: "high_availability", selectionPolicy: "", maxChannels: 15, onlyOfficial: true } },
+        ],
+      };
+      const appended = plain(helpers.buildProfilesInput(dirtyPayload, 42, "append"));
+      assert.equal("selectionPolicy" in appended.profiles[1].dynamicChannelStrategy, false); // 脏值剔除
+      assert.equal(appended.profiles[1].dynamicChannelStrategy.mode, "high_availability"); // 其余字段保留
+      assert.deepEqual(appended.profiles[0].channelIDs, [17533, 42]); // 追加目标不受影响
+      assert.equal(appended.profiles[0].dynamicChannelStrategy, null); // 激活 profile 维持 manual 强制
+      const copied = plain(helpers.buildProfilesInputCopy(dirtyPayload));
+      assert.equal("selectionPolicy" in copied.profiles[1].dynamicChannelStrategy, false);
+      assert.equal(copied.profiles[1].dynamicChannelStrategy.onlyOfficial, true);
+
+      const validPayload = {
+        activeProfile: "default",
+        profiles: [
+          { name: "default", channelBindingMode: "manual" },
+          { name: "auto", channelBindingMode: "dynamic", dynamicChannelStrategy: { mode: "balanced", selectionPolicy: "sticky_hrw", maxChannels: 3 } },
+        ],
+      };
+      const validCopied = plain(helpers.buildProfilesInputCopy(validPayload));
+      assert.equal(validCopied.profiles[1].dynamicChannelStrategy.selectionPolicy, "sticky_hrw"); // 合法值保留
+      const validAppended = plain(helpers.buildProfilesInput(validPayload, 7, "replace"));
+      assert.equal(validAppended.profiles[1].dynamicChannelStrategy.selectionPolicy, "sticky_hrw");
+      assert.deepEqual(validAppended.profiles[0].channelIDs, [7]);
+    }
   }
 
   // ===== 更新密钥（0.4.12）：rotateKey 轮换流程 =====

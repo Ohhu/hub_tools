@@ -24,6 +24,12 @@ async function main() {
   assert.equal(url.searchParams.get("page"), "2");
   assert.equal(url.searchParams.get("sort"), "multiplier_asc");
 
+  // ===== 官方/免费按钮的排序联动（0.4.16）：任一激活切价格升序（双文案候选），都关闭回落站点默认（null＝下拉第一项） =====
+  assert.equal(helpers.marketplaceSortTextFor("all", false), null);
+  assert.deepEqual(plain(helpers.marketplaceSortTextFor("free", false)), ["倍率从低到高", "价格从低到高"]); // plain 跨 Realm 规避 deepEqual 原型差异
+  assert.deepEqual(plain(helpers.marketplaceSortTextFor("all", true)), ["倍率从低到高", "价格从低到高"]);
+  assert.deepEqual(plain(helpers.marketplaceSortTextFor("free", true)), ["倍率从低到高", "价格从低到高"]);
+
   console.log("marketplace pricing helpers ok");
 }
 

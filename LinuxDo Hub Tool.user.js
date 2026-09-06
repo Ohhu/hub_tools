@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LinuxDo Hub Tool
 // @namespace    https://hub.linux.do/
-// @version      0.4.14
+// @version      0.4.16
 // @description  在 LinuxDo Hub 中快捷管理 API Key 渠道绑定，并支持资源市场免费筛选
 // @author       vsiu
 // @license      GPL-3.0-only
@@ -1108,8 +1108,8 @@ const MARKETPLACE_VERIFICATION_ACTION_RE = /^(真伪核验|Authenticity\s+Check|
 const MARKETPLACE_SEARCH_PLACEHOLDER_RE = /渠道名称|支持模型|search/i;
 const REQUESTS_API_KEY_LABEL = "API密钥";
 const REQUEST_LOG_CHANNEL_HEADER_RE = /^(渠道|channel)$/i;
-const MARKETPLACE_FREE_SORT_TEXT = "倍率从低到高";
-const MARKETPLACE_DEFAULT_SORT_TEXT = "综合推荐";
+// 价格升序在各页面的文案不同：渠道广场「倍率从低到高」，模型详情页「价格从低到高」。按候选顺序匹配当前下拉第一命中项。
+const MARKETPLACE_PRICE_ASC_SORT_TEXTS = ["倍率从低到高", "价格从低到高"];
 
 function openSelectLikeUser(trigger) {
   dispatchPointerEvent(trigger, "pointerdown", 1);
@@ -1606,24 +1606,28 @@ function cleanupLegacyPriceParam() {
   history.replaceState(history.state, "", url);
 }
 
+// 官方或免费任一激活时切价格升序（文案候选见 MARKETPLACE_PRICE_ASC_SORT_TEXTS），
+// 都关闭时回落站点默认排序（下拉第一项，不硬编码文案、不记录前值）。返回 null 表示默认。
+function marketplaceSortTextFor(priceFilter, officialFilter) {
+  return priceFilter === "free" || Boolean(officialFilter) ? MARKETPLACE_PRICE_ASC_SORT_TEXTS : null;
+}
+
 function triggerMarketplaceRefresh() {
-  if (location.pathname.startsWith("/marketplace/models/")) {
-    scheduleRouteScans();
-    return;
-  }
-  const targetSort = currentPriceFilter() === "free" ? MARKETPLACE_FREE_SORT_TEXT : MARKETPLACE_DEFAULT_SORT_TEXT;
+  const targetSort = marketplaceSortTextFor(currentPriceFilter(), currentOfficialFilter());
   if (triggerMarketplaceSortRefresh(targetSort)) return;
   scheduleRouteScans();
 }
 
-function triggerMarketplaceSortRefresh(targetText) {
+function triggerMarketplaceSortRefresh(preferredTexts) {
   const trigger = findMarketplaceSortTrigger();
   if (!trigger) return false;
   const fetchStartedAt = lastMarketplaceChannelsFetchAt;
   openSelectLikeUser(trigger);
   setTimeout(() => {
-    const option = findVisibleOptionByText(targetText);
+    // 有目标文案时只选命中项（无命中则原样关回下拉，不改动排序）；无目标（回落默认）时选下拉第一项。
+    const option = preferredTexts && preferredTexts.length ? findVisibleSortOption(preferredTexts) : findDefaultSortOption();
     if (option) selectOptionLikeUser(option);
+    else if (preferredTexts) openSelectLikeUser(trigger);
   }, 0);
   setTimeout(() => {
     if (lastMarketplaceChannelsFetchAt <= fetchStartedAt) scheduleRouteScans();
@@ -1643,10 +1647,21 @@ function resetPriceFilterState() {
   return anchors.sort?.querySelector?.('[role="combobox"], button') || null;
 }
 
-function findVisibleOptionByText(text) {
-  return Array.from(document.querySelectorAll('[role="option"]')).find((option) =>
-    cleanText(option.textContent) === text && isElementVisible(option),
-  ) || null;
+function findVisibleSortOption(preferredTexts) {
+  const options = visibleSortOptions();
+  for (const text of preferredTexts) {
+    const option = options.find((candidate) => cleanText(candidate.textContent) === text);
+    if (option) return option;
+  }
+  return null;
+}
+
+function findDefaultSortOption() {
+  return visibleSortOptions()[0] || null;
+}
+
+function visibleSortOptions() {
+  return Array.from(document.querySelectorAll('[role="option"]')).filter(isElementVisible);
 }
 
 function isElementVisible(element) {
@@ -1909,7 +1924,10 @@ function buildProfilesInput(profilesPayload, channelID, mode = "replace") {
 function buildProfilesInputWithChannelIDs(profilesPayload, channelIDs) {
   const activeProfile = profilesPayload.activeProfile || "default";
   const profiles = Array.isArray(profilesPayload.profiles) && profilesPayload.profiles.length
-    ? profilesPayload.profiles.map((profile) => ({ ...profile }))
+    ? profilesPayload.profiles.map((profile) => ({
+      ...profile,
+      dynamicChannelStrategy: sanitizeDynamicChannelStrategyInput(profile.dynamicChannelStrategy),
+    }))
     : [{ name: activeProfile }];
   const target = profiles.find((profile) => profile.name === activeProfile) || profiles[0];
   target.name = target.name || activeProfile;
@@ -1950,6 +1968,20 @@ function keepCompleteEntries(input, key, isComplete) {
   else delete input[key];
 }
 
+// DynamicSelectionPolicy 合法值（2026-09-05 线上内省）。存量数据可能存空串等非法值——
+// 读取不校验、写入校验严格（"is not a valid DynamicSelectionPolicy" 拒绝整笔 mutation），
+// 回写前剔除非法值；该字段可空，剔除即回落服务端默认。
+const DYNAMIC_SELECTION_POLICIES = ["ranked", "sticky_hrw", "power_of_two"];
+
+function sanitizeDynamicChannelStrategyInput(strategy) {
+  if (!strategy || typeof strategy !== "object") return strategy;
+  const { selectionPolicy } = strategy;
+  if (selectionPolicy == null || DYNAMIC_SELECTION_POLICIES.includes(selectionPolicy)) return strategy;
+  const rest = { ...strategy };
+  delete rest.selectionPolicy;
+  return rest;
+}
+
 function buildProfileInputCopy(profile) {
   const input = pruneInputNulls(profile && typeof profile === "object" ? profile : {});
   for (const key of Object.keys(input)) {
@@ -1967,6 +1999,7 @@ function buildProfileInputCopy(profile) {
     if (!Object.keys(input.routingPolicy).length) delete input.routingPolicy;
   }
   if (input.dynamicChannelStrategy && !input.dynamicChannelStrategy.mode) delete input.dynamicChannelStrategy; // mode 必填
+  else if (input.dynamicChannelStrategy) input.dynamicChannelStrategy = sanitizeDynamicChannelStrategyInput(input.dynamicChannelStrategy); // 剔除非法 selectionPolicy
   return input;
 }
 
@@ -2695,6 +2728,12 @@ function escapeHtml(value) {
       #${DIALOG_ID} .hkb-edit-body{display:grid;grid-template-rows:auto auto auto minmax(0,1fr);gap:14px;min-height:0;padding-top:4px}
       #${DIALOG_ID} .hkb-edit-row{display:grid;grid-template-columns:72px minmax(0,1fr);align-items:center;gap:12px;min-height:0}
       #${DIALOG_ID} .hkb-edit-row .hkb-label{align-self:center}
+      #${DIALOG_ID} .hkb-edit-key-picker{display:flex;align-items:center;gap:8px}
+      #${DIALOG_ID} .hkb-edit-key-picker .hkb-control{flex:1;min-width:0}
+      #${DIALOG_ID} .hkb-key-caret{width:36px;min-width:36px;height:36px;min-height:36px;border-radius:10px;border:1px solid var(--border,#e5e7eb);background:color-mix(in oklab,var(--input,#e5e7eb) 18%,transparent)}
+      #${DIALOG_ID} .hkb-key-caret[aria-expanded="true"]{border-color:var(--ring,#9ca3af)}
+      #${DIALOG_ID} .hkb-key-caret svg{width:16px;height:16px;transition:transform .15s}
+      #${DIALOG_ID} .hkb-key-caret[aria-expanded="true"] svg{transform:rotate(180deg)}
       #${DIALOG_ID} .hkb-edit-row-list{align-items:start}
       #${DIALOG_ID} .hkb-edit-row-list .hkb-label{padding-top:10px}
       #${DIALOG_ID} [data-key-panel]{min-height:70px}
@@ -2877,8 +2916,7 @@ function escapeHtml(value) {
       <div class="hkb-main" data-view-panel="edit" hidden>
         <div class="hkb-edit-title"><button type="button" class="hkb-icon-btn hkb-back" data-action="close-edit" title="返回" aria-label="返回"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button><span>编辑绑定渠道</span></div>
         <div class="hkb-edit-body">
-          <div class="hkb-edit-row"><span class="hkb-label">API Key</span><div class="hkb-key-picker" data-role="edit-key-picker"><button type="button" class="hkb-control hkb-key-trigger" data-action="toggle-key-menu" data-role="edit-key-trigger" aria-haspopup="listbox" aria-expanded="false"><span data-role="edit-key-label">暂无 API Key</span></button><ul class="hkb-key-menu" data-role="edit-key-menu" role="listbox" hidden></ul></div></div>
-          <div class="hkb-edit-row"><label class="hkb-label" for="hkb-edit-key-name">名称</label><input id="hkb-edit-key-name" name="hkb-edit-key-name" class="hkb-control" data-role="edit-key-name" type="text" autocomplete="off"></div>
+          <div class="hkb-edit-row"><label class="hkb-label" for="hkb-edit-key-name">API Key</label><div class="hkb-key-picker hkb-edit-key-picker" data-role="edit-key-picker"><input id="hkb-edit-key-name" name="hkb-edit-key-name" class="hkb-control" data-role="edit-key-name" type="text" autocomplete="off" placeholder="名称可直接修改"><button type="button" class="hkb-icon-btn hkb-key-caret" data-action="toggle-key-menu" data-role="edit-key-trigger" aria-haspopup="listbox" aria-expanded="false" title="切换 API Key" aria-label="切换 API Key"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button><ul class="hkb-key-menu" data-role="edit-key-menu" role="listbox" hidden></ul></div></div>
           <div class="hkb-edit-row"><span class="hkb-label">当前渠道</span><div class="hkb-control hkb-channel-tag" data-role="edit-channel-label"></div></div>
           <div class="hkb-edit-row hkb-edit-row-list"><span class="hkb-label">绑定渠道</span><div class="hkb-edit-list" data-role="edit-channel-list" tabindex="0"></div></div>
         </div>
@@ -3039,6 +3077,7 @@ function escapeHtml(value) {
       ensureKeyEnabledForBinding,
       updateCachedKeyStatus,
       loadMissingChannelNames,
+      marketplaceSortTextFor,
       __setPriceFilterForTest: (value) => { selectedPriceFilter = normalizePriceFilter(value); },
       __setModelIDFilterForTest: (value) => { selectedMarketplaceModelID = String(value || ""); },
       __setOfficialFilterForTest: (value) => { selectedOfficialFilter = Boolean(value); },
